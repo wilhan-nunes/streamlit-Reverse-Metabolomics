@@ -11,12 +11,18 @@ import io
 mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype'] = 42
 
+#TODO: Bump version
+app_version = "2025-06-30"
+
+menu_items={"about": ("**App version: %s**" % app_version)}
+
 # Set page config
 st.set_page_config(
     page_title="Reverse Metabolomics Analysis",
     page_icon="🧬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items=menu_items,
 )
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")

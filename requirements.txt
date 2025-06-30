@@ -11,3 +11,5 @@ numpy
 kaleido
 rdkit
 Pillow
+requests-cache
+tqdm
