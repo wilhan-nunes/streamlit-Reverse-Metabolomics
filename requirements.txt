@@ -1,0 +1,13 @@
+streamlit==1.46.0
+requests
+seaborn
+networkx
+scipy
+pandas
+plotly
+matplotlib
+UpSetPlot
+numpy
+kaleido
+rdkit
+Pillow
