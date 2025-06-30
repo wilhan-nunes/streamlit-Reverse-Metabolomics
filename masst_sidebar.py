@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from masst_client import masst_query_all  # Assuming masst_client.py is in the same directory
+from masst_client import masst_query_all
 import requests
 
 
@@ -120,7 +120,7 @@ def create_masst_sidebar():
 def create_usi_input():
     """Create main area input for USI data"""
     with st.sidebar:
-        st.subheader("USI Input Data")
+        st.subheader("USI Input Data", help='Enter one USI per line in the data editor below. You can add more rows as necessary.' )
 
         # Create sample data structure
         if 'usi_data' not in st.session_state:

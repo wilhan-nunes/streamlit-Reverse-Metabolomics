@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
-st.markdown("Analyze fastMASST results with interactive visualizations")
+st.markdown("Edit entries in the sidebar to analyze fastMASST results with interactive visualizations")
 
 
 # Create custom colormap
@@ -150,9 +150,10 @@ use_example = st.sidebar.checkbox("Load example data", value=False, help="Use bu
 if not use_example:
     from masst_sidebar import create_masst_sidebar, create_usi_input, masst_query_all
 
-    masst_query_params = create_masst_sidebar()
-    redu_file = open("example_data/REDU_metadata_nat_prot.tsv", "rb")
     usi_data = create_usi_input()
+    masst_query_params = create_masst_sidebar()
+    st.session_state.masst_query_params = masst_query_params
+    redu_file = open("example_data/REDU_metadata_nat_prot.tsv", "rb")
     # Filter out empty rows
     query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
@@ -162,8 +163,8 @@ if not use_example:
                 # Here you would call your imported masst_query_all function
                 results = masst_query_all(query_df, **masst_query_params)
                 st.session_state.results = results
-                st.success(f"Would query {len(query_df)} USIs with parameters: {masst_query_params}")
-                st.write(results)
+                st.success(f"Query performed with {len(query_df)} USIs with parameters: {masst_query_params}")
+                # st.write(results)
         else:
             st.error("Please add at least one USI to query")
 
@@ -181,20 +182,7 @@ else:
     redu_file = open("example_data/REDU_metadata_nat_prot.tsv", "rb")
 
 if "results" in st.session_state and redu_file:
-    # Parameters
-    st.sidebar.header("⚙️ Parameters")
     results = st.session_state.results
-
-    delta_mass_tolerance = st.sidebar.slider(
-        "Delta Mass Tolerance",
-        min_value=0.01,
-        max_value=0.1,
-        value=0.05,
-        step=0.01,
-        help="Mass tolerance for filtering fastMASST results"
-    )
-
-
     # Load and process data
     @st.cache_data
     def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table:pd.DataFrame, redu_file,  tolerance: float):
@@ -246,7 +234,15 @@ if "results" in st.session_state and redu_file:
 
     # Load data
     try:
-        df_merged, df_redu, _ = load_and_process_data(results, usi_data,redu_file, delta_mass_tolerance)
+        #this deals with example data where no masst_query_params are set
+        if use_example:
+            mass_tolerance = st.sidebar.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0, value=0.02, step=0.01,)
+            st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
+        else:
+            masst_query_params = st.session_state.masst_query_params
+            mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)  # Default to 0.02 if not set
+
+        df_merged, df_redu, _ = load_and_process_data(results, usi_data, redu_file, mass_tolerance)
         # Organism selection
         st.sidebar.header("🧬 Organism Filter")
 
@@ -375,7 +371,7 @@ if "results" in st.session_state and redu_file:
                         with col_b:
                             # Download plot as PNG
                             img_buffer = io.BytesIO()
-                            fig.fig.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
+                            fig.figure.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
                             img_buffer.seek(0)
 
                             st.download_button(
@@ -389,8 +385,8 @@ if "results" in st.session_state and redu_file:
                         st.error(f"Error generating heatmap: {str(e)}")
 
         # Data preview
-        st.header("👀 Data Preview")
-        st.subheader("Merged Dataset")
+        st.header("Data Preview")
+        st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
         st.dataframe(df_filtered.head(100))
 
         # Download full dataset
@@ -408,25 +404,25 @@ if "results" in st.session_state and redu_file:
         raise
 
 else:
-    st.info("👆 Please upload your fastMASST CSV files and ReDU table to begin analysis.")
+    st.info("👈 Please edit the USI input data table in the sidebar, choose your parameters and click Run MASST Query to start.")
 
     st.markdown("""
     ### 📖 How to use this tool:
 
-    1. **Upload fastMASST results**: Upload one or more CSV files containing your fastMASST search results
-    2. **Upload ReDU table**: Upload the ReDU sample information table (TSV or CSV format)
-    3. **Set parameters**: Adjust the delta mass tolerance and customize compound names
-    4. **Select organism**: Choose to analyze humans, rodents, or all organisms
-    5. **Choose analysis variable**: Select which ReDU column to analyze (body parts, diseases, etc.)
-    6. **Generate visualizations**: Create interactive heatmaps with various normalization options
+    1. **Enter or upload USIs**: In the sidebar, input your USIs (Universal Spectrum Identifiers) or load the example data.
+    2. **Set MASST parameters**: Adjust search parameters as needed.
+    3. **Run MASST Query**: Click the "Run MASST Query" button to retrieve fastMASST results.
+    4. **Adjust analysis settings**: Set delta mass tolerance, select organism, and choose the analysis variable (e.g., body part, disease, gender, or age).
+    5. **Generate visualizations**: Select heatmap options and click "Generate Heatmap" to view interactive results.
+    6. **Download results**: Export summary tables and heatmaps as CSV or PNG for further analysis.
 
     ### 📊 Available visualizations:
-    - **Raw counts**: Direct spectral match counts
-    - **Log-transformed counts**: Log2-transformed counts for better visualization of low-abundance features
-    - **ReDU-normalized counts**: Counts normalized by data availability in ReDU database
+    - **Raw counts**: Direct spectral match counts.
+    - **Log-transformed counts**: Log2-transformed counts for improved visualization of low-abundance features.
+    - **ReDU-normalized counts**: Counts normalized by sample availability in the ReDU database.
 
     ### 💡 Tips:
-    - Use clustering options to identify patterns in your data
-    - Download results as CSV files for further analysis
-    - Save heatmaps as high-resolution PNG images
+    - Use clustering options to reveal patterns in your data.
+    - Download tables and images for offline analysis or publication.
+    - Example data is available for quick testing and demonstration.
     """)
