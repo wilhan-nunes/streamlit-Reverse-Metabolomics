@@ -1,3 +1,5 @@
+import os
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -147,6 +149,13 @@ st.sidebar.header("📁 Data Input")
 # Example data option
 use_example = st.sidebar.checkbox("Load example data", value=False, help="Use built-in example files instead of uploading your own")
 
+if not os.path.exists('REDU_metadata.tsv'):
+    from download_redu import download_redu_metadata
+    with st.spinner("Downloading ReDU metadata file... this may take a while!"):
+        download_redu_metadata('REDU_metadata.tsv')
+
+redu_file = open("REDU_metadata.tsv", "rb")
+
 if not use_example:
     from masst_sidebar import create_masst_sidebar, create_usi_input, masst_query_all
 
@@ -179,7 +188,7 @@ else:
                 ],
                 'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
             })
-    redu_file = open("example_data/REDU_metadata_nat_prot.tsv", "rb")
+
 
 if "results" in st.session_state and redu_file:
     results = st.session_state.results
