@@ -98,8 +98,8 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
     return pivot_table
 
 
-def create_heatmap(pivot_table, variable, log_scale=False, normalize=False,
-                   col_cluster=False, row_cluster=False, width=2, height=8):
+def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
+                   col_cluster=False, row_cluster=False, width=2, height=8, ):
     """Create heatmap visualization."""
     columns_for_heatmap = pivot_table.columns[1:]
 
@@ -108,7 +108,7 @@ def create_heatmap(pivot_table, variable, log_scale=False, normalize=False,
         col_cluster=col_cluster,
         row_cluster=row_cluster,
         method='complete',
-        metric='euclidean',
+        metric=metric,
         cmap=cmap_wbr,
         yticklabels=pivot_table[variable],
         linewidths=0.005,
@@ -314,17 +314,54 @@ if "results" in st.session_state and redu_file:
             st.header("🔥 Heatmap Visualizations")
 
             # Heatmap options
-            heatmap_type = st.selectbox(
-                "Heatmap type:",
-                options=['Raw counts', 'Log-transformed counts', 'ReDU-normalized counts'],
-                help="Choose the type of heatmap to generate"
-            )
+            col1, col2 = st.columns(2)
+            with col1:
+                heatmap_type = st.selectbox(
+                    "Heatmap type:",
+                    options=['Raw counts', 'Log-transformed counts', 'ReDU-normalized counts'],
+                    help="Choose the type of heatmap to generate"
+                )
 
-            col_cluster = st.checkbox("Cluster columns", value=False)
-            row_cluster = st.checkbox("Cluster rows", value=False)
+            clustering_metrics = {
+                "Bray-Curtis": "braycurtis",
+                "Canberra": "canberra",
+                "Chebyshev": "chebyshev",
+                "City Block (Manhattan)": "cityblock",
+                "Correlation": "correlation",
+                "Cosine": "cosine",
+                "Dice": "dice",
+                "Euclidean": "euclidean",
+                "Hamming": "hamming",
+                "Jaccard": "jaccard",
+                "Jensen-Shannon": "jensenshannon",
+                "Kulczynski": "kulczynski1",
+                "Mahalanobis": "mahalanobis",
+                "Matching": "matching",
+                "Minkowski": "minkowski",
+                "Rogers-Tanimoto": "rogerstanimoto",
+                "Russell-Rao": "russellrao",
+                "Standardized Euclidean": "seuclidean",
+                "Sokal-Michener": "sokalmichener",
+                "Sokal-Sneath": "sokalsneath",
+                "Squared Euclidean": "sqeuclidean",
+                "Yule": "yule"
+            }
 
-            heatmap_width = st.slider("Heatmap width", min_value=2, max_value=10, value=4)
-            heatmap_height = st.slider("Heatmap height", min_value=4, max_value=15, value=8)
+            with col2:
+                metric = st.selectbox(
+                    "Clustering metric:",
+                    options=list(clustering_metrics.keys()),
+                    help='The distance metric to use. See scipy.spatial.distance.pdist documentation for more info.'
+                )
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                col_cluster = st.checkbox("Cluster columns", value=False)
+                heatmap_width = st.number_input("Heatmap width", min_value=2, max_value=10, value=4)
+            with col2:
+                row_cluster = st.checkbox("Cluster rows", value=False)
+                heatmap_height = st.number_input("Heatmap height", min_value=4, max_value=15, value=4)
 
             if st.button("🎨 Generate Heatmap"):
                 with st.spinner("Generating heatmap..."):
@@ -353,6 +390,7 @@ if "results" in st.session_state and redu_file:
                         fig = create_heatmap(
                             pivot_table,
                             analysis_column,
+                            metric=clustering_metrics.get(metric, 'euclidean'),
                             log_scale=log_transform,
                             normalize=normalize_redu,
                             col_cluster=col_cluster,
