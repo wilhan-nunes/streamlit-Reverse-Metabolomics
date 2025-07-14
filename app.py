@@ -16,7 +16,7 @@ mpl.rcParams['ps.fonttype'] = 42
 #TODO: Bump version
 app_version = "2025-06-30"
 
-menu_items={"about": ("**App version: %s**" % app_version)}
+menu_items = {"about": f"**App version: {app_version}"}
 
 # Set page config
 st.set_page_config(
@@ -162,7 +162,6 @@ if not use_example:
     usi_data = create_usi_input()
     masst_query_params = create_masst_sidebar()
     st.session_state.masst_query_params = masst_query_params
-    redu_file = open("example_data/REDU_metadata_nat_prot.tsv", "rb")
     # Filter out empty rows
     query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
@@ -362,7 +361,7 @@ if "results" in st.session_state and redu_file:
                             height=heatmap_height
                         )
 
-                        st.pyplot(fig.fig)
+                        st.pyplot(fig.figure)
 
                         # Download options
                         col_a, col_b = st.columns(2)
