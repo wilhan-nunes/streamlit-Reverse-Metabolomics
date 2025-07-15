@@ -324,6 +324,9 @@ if "results" in st.session_state and df_redu is not None:
                 help="Choose which ReDU column to analyze"
             )
 
+            unique_options = list(df_filtered[analysis_column].unique())
+            variable_to_exclude = st.multiselect("Exclude from analysis (optional)", options=unique_options)
+
         st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice.lower()}")
 
         # Main content
@@ -413,6 +416,11 @@ if "results" in st.session_state and df_redu is not None:
                             df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
                             df_redu_counts.columns = [analysis_column, f'{analysis_column}_counts']
                             redu_count_col = f'{analysis_column}_counts'
+
+                        if variable_to_exclude:
+                            drop_mask = df_filtered[analysis_column].isin(variable_to_exclude)
+                            indices_to_drop = df_filtered[drop_mask].index
+                            df_filtered = df_filtered.drop(indices_to_drop)
 
                         pivot_table = prepare_pivot_table(
                             df_filtered,
