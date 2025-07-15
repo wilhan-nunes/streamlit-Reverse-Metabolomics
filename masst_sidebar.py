@@ -98,7 +98,7 @@ def create_masst_sidebar():
     )
 
     # Cosine threshold
-    cosine_threshold = st.sidebar.slider(
+    cosine_threshold = st.sidebar.number_input(
         "Cosine Similarity Threshold",
         min_value=0.0,
         max_value=1.0,
