@@ -147,14 +147,16 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
 st.sidebar.header("📁 Data Input")
 
 # Example data option
-use_example = st.sidebar.checkbox("Load example data", value=False, help="Use built-in example files instead of uploading your own")
+use_example = st.sidebar.checkbox("Load example data", value=False, help="Use built-in example files instead of uploading your own", key='load_example_checkbox')
 
 if not os.path.exists('REDU_metadata.tsv'):
     from download_redu import download_redu_metadata
     with st.spinner("Downloading ReDU metadata file... this may take a while!"):
         download_redu_metadata('REDU_metadata.tsv')
 
-redu_file = open("REDU_metadata.tsv", "rb")
+if "redu_file" not in st.session_state:
+    st.session_state['redu_file'] = open("REDU_metadata.tsv", "rb")
+    st.toast("Reading Redu metadata file!")
 
 if not use_example:
     from masst_sidebar import create_masst_sidebar, create_usi_input, masst_query_all
@@ -189,7 +191,8 @@ else:
             })
 
 
-if "results" in st.session_state and redu_file:
+if "results" in st.session_state and st.session_state.redu_file:
+    redu_file = st.session_state['redu_file']
     results = st.session_state.results
     # Load and process data
     @st.cache_data
@@ -251,43 +254,46 @@ if "results" in st.session_state and redu_file:
             mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)  # Default to 0.02 if not set
 
         df_merged, df_redu, _ = load_and_process_data(results, usi_data, redu_file, mass_tolerance)
+
         # Organism selection
-        st.sidebar.header("🧬 Organism Filter")
+        with st.sidebar:
+            st.header("🧬 Organism Filter")
 
-        available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
+            available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
 
-        organism_choice = st.sidebar.selectbox(
-            "Select organism:",
-            options=['Humans', 'Rodents', 'All organisms'],
-            help="Filter data by organism type"
-        )
+            organism_choice = st.selectbox(
+                "Select organism:",
+                options=['Humans', 'Rodents', 'All organisms'],
+                help="Filter data by organism type"
+            )
 
-        if organism_choice == 'Humans':
-            df_filtered = df_merged[df_merged['NCBITaxonomy'] == '9606|Homo sapiens']
-            df_redu_filtered = df_redu[df_redu['NCBITaxonomy'] == '9606|Homo sapiens']
-        elif organism_choice == 'Rodents':
-            rodent_list = ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
-                           '10116|Rattus norvegicus']
-            df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(rodent_list)]
-            df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(rodent_list)]
-        else:
-            df_filtered = df_merged
-            df_redu_filtered = df_redu
+            if organism_choice == 'Humans':
+                df_filtered = df_merged[df_merged['NCBITaxonomy'] == '9606|Homo sapiens']
+                df_redu_filtered = df_redu[df_redu['NCBITaxonomy'] == '9606|Homo sapiens']
+            elif organism_choice == 'Rodents':
+                rodent_list = ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
+                               '10116|Rattus norvegicus']
+                df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(rodent_list)]
+                df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(rodent_list)]
+            else:
+                df_filtered = df_merged
+                df_redu_filtered = df_redu
 
         st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice.lower()}")
 
-        # Analysis options
-        st.sidebar.header("📈 Analysis Options")
+        with st.sidebar:
+            # Analysis options
+            st.header("📈 Analysis Options")
 
-        available_columns = [col for col in df_filtered.columns if
-                             col in ['UBERONBodyPartName', 'DOIDCommonName', 'ATTRIBUTE_SubjectGender',
-                                     'ATTRIBUTE_Age']]
+            available_columns = [col for col in df_filtered.columns if
+                                 col in ['UBERONBodyPartName', 'DOIDCommonName', 'ATTRIBUTE_SubjectGender',
+                                         'ATTRIBUTE_Age']]
 
-        analysis_column = st.sidebar.selectbox(
-            "Select analysis variable:",
-            options=available_columns,
-            help="Choose which ReDU column to analyze"
-        )
+            analysis_column = st.selectbox(
+                "Select analysis variable:",
+                options=available_columns,
+                help="Choose which ReDU column to analyze"
+            )
 
         # Main content
         col1, col2 = st.columns([1, 2])
