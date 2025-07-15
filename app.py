@@ -223,15 +223,14 @@ with st.sidebar:
 
         usi_data = create_usi_input()
         masst_query_params = create_masst_sidebar()
-        st.session_state.masst_query_params = masst_query_params
         # Filter out empty rows
         query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
+        st.session_state.masst_query_params = masst_query_params
         st.session_state['run_masst_query'] = st.button("Run MASST Query", type="primary")
 
     else:
         results = pd.read_csv('example_data/his-c4-phe-c4-phe-ca.csv')
-        st.session_state.results = results
         usi_data = pd.DataFrame({
             'usi': [
                 'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
@@ -240,6 +239,11 @@ with st.sidebar:
             ],
             'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
         })
+        st.write(usi_data)
+        mass_tolerance = st.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0,
+                                                 value=0.02, step=0.01)
+        if st.button('Run Example'):
+            st.session_state.results = results
 
     if st.button("Clear All Cache", type="secondary"):
         st.session_state.clear()
@@ -264,8 +268,8 @@ if st.session_state.get('run_masst_query', False):
         with st.spinner("Running MASST query..."):
             # Here you would call your imported masst_query_all function
             results = masst_query_all(query_df, **masst_query_params)
-            st.session_state.results = results
             st.success(f"Query performed with {len(query_df)} USIs with parameters: {masst_query_params}")
+            st.session_state.results = results
             # st.write(results)
     else:
         st.error("Please add at least one USI to query")
@@ -275,8 +279,6 @@ if "results" in st.session_state and df_redu is not None:
 
     try:
         if use_example:
-            mass_tolerance = st.sidebar.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0,
-                                                     value=0.02, step=0.01)
             st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
         else:
             masst_query_params = st.session_state.masst_query_params
