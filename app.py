@@ -110,7 +110,7 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
 
 @st.cache_data
 def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
-                          tolerance: float):
+                          tolerance: float, organism_filter: str = "All organisms"):
     """Load and process data with pre-loaded ReDU dataframe"""
 
     usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
@@ -146,7 +146,21 @@ def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFr
         for old, new in body_part_replacements.items():
             df_merged['UBERONBodyPartName'] = df_merged['UBERONBodyPartName'].str.replace(old, new)
 
-    return df_merged, df_redu, compound_names
+    taxonomy_filters = {
+        "Humans": ['9606|Homo sapiens'],
+        "Rodents": ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
+                    '10116|Rattus norvegicus']
+    }
+
+    if organism_filter in taxonomy_filters:
+        selected_taxa = taxonomy_filters[organism_choice]
+        df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(selected_taxa)]
+        df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(selected_taxa)]
+        return df_filtered, df_redu_filtered
+
+    else:
+        return df_merged, df_redu
+
 
 
 def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
@@ -286,15 +300,12 @@ if "results" in st.session_state:
             masst_query_params = st.session_state.masst_query_params
             mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)
 
-        # Pass the DataFrame instead of file handle
-        df_merged, df_redu, _ = load_and_process_data(results, usi_data, df_redu, mass_tolerance)
-
-        # Organism selection
+               # Organism selection
         col1, col2 = st.columns(2)
         with col1:
             st.write("🧬 Organism Filter")
 
-            available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
+            # available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
 
             organism_choice = st.selectbox(
                 "Select organism:",
@@ -302,17 +313,7 @@ if "results" in st.session_state:
                 help="Filter data by organism type"
             )
 
-            if organism_choice == 'Humans':
-                df_filtered = df_merged[df_merged['NCBITaxonomy'] == '9606|Homo sapiens']
-                df_redu_filtered = df_redu[df_redu['NCBITaxonomy'] == '9606|Homo sapiens']
-            elif organism_choice == 'Rodents':
-                rodent_list = ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
-                               '10116|Rattus norvegicus']
-                df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(rodent_list)]
-                df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(rodent_list)]
-            else:
-                df_filtered = df_merged
-                df_redu_filtered = df_redu
+            df_filtered, df_redu_filtered = load_and_process_data(results, usi_data, df_redu, mass_tolerance, organism_choice)
 
         with col2:
             # Analysis options
