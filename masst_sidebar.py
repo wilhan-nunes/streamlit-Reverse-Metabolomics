@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 
 
+@st.cache_data(ttl=3600)
 def get_database_options():
     url = "https://fasst.gnps2.org/libraries"
     fallback_options = [
