@@ -417,7 +417,7 @@ if "results" in st.session_state:
                         df_redu_counts = None
                         redu_count_col = None
 
-                        if normalize_redu and analysis_column in ['DOIDCommonName']:
+                        if normalize_redu:
                             df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
                             df_redu_counts.columns = [analysis_column, f'{analysis_column}_counts']
                             redu_count_col = f'{analysis_column}_counts'
