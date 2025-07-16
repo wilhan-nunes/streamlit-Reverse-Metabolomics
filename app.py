@@ -256,11 +256,7 @@ if not os.path.exists('REDU_metadata.tsv'):
     with st.spinner("Downloading ReDU metadata file... this may take a while!"):
         download_redu_metadata('REDU_metadata.tsv')
 
-# Load ReDU data once and cache it
-df_redu = load_redu_data()
-if df_redu is None:
-    st.error("Failed to load ReDU metadata file")
-    st.stop()
+
 
 
 if st.session_state.get('run_masst_query', False):
@@ -274,7 +270,13 @@ if st.session_state.get('run_masst_query', False):
     else:
         st.error("Please add at least one USI to query")
 
-if "results" in st.session_state and df_redu is not None:
+if "results" in st.session_state:
+    # Load ReDU data once and cache it
+    df_redu = load_redu_data()
+    if df_redu is None:
+        st.error("Failed to load ReDU metadata file")
+        st.stop()
+
     results = st.session_state.results
 
     try:
