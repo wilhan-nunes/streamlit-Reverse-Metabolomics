@@ -249,7 +249,7 @@ with st.sidebar:
         query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
         st.session_state.masst_query_params = masst_query_params
-        st.session_state['run_masst_query'] = st.button("Run MASST Query", type="primary")
+        st.session_state['run_masst_query'] = st.button("Run MASST Query", icon="🔎", type="primary", use_container_width=True)
 
     else:
         results = pd.read_csv('example_data/his-c4-phe-c4-phe-ca.csv')
@@ -264,10 +264,10 @@ with st.sidebar:
         st.write(usi_data)
         mass_tolerance = st.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0,
                                                  value=0.02, step=0.01)
-        if st.button('Run Example'):
+        if st.button('Run Example', icon="🧪", type="primary", use_container_width=True):
             st.session_state.results = results
 
-    if st.button("Clear All Cache", type="secondary"):
+    if st.button("Clear All Cache", type="secondary", icon="🗑️",use_container_width=True):
         st.session_state.clear()
         st.session_state["use_example"] = False
         st.rerun()
