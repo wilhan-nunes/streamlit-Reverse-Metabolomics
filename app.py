@@ -7,25 +7,33 @@ import seaborn as sns
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
+import subprocess
 
 from welcome import welcome_page
+
+
+def get_git_short_rev():
+    try:
+        return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL).decode().strip()
+    except subprocess.CalledProcessError:
+        return ".git/ not found"
 
 # Configure matplotlib for PDF output
 mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype'] = 42
 
-#TODO: Bump version
-app_version = "2025-06-30"
+# TODO: Bump version
+app_version = "2025-07-17"
+git_hash = get_git_short_rev()
+repo_link = "https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics"
 
-menu_items = {"about": f"**App version: {app_version}**"}
-
-# Set page config
 st.set_page_config(
     page_title="Reverse Metabolomics Analysis",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded",
-    menu_items=menu_items,
+    menu_items={"About": (f"**App version**: {app_version} | "
+                          f"[**Git Hash**: {git_hash}]({repo_link}/commit/{git_hash})")},
 )
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
