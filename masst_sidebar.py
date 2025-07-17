@@ -3,36 +3,41 @@ import pandas as pd
 import requests
 
 
+FALLBACK_OPTIONS = [
+    "gnpsdata_index",
+    "gnpslibrary",
+    "massivedata_index",
+    "massivekb_index",
+    "metabolomicspanrepo_index_latest",
+    "metabolomicspanrepo_index_nightly",
+    "panrepo_2024_11_12",
+    "panrepo_2025_06_18",
+    "ptfi2_index",
+    "gnpsdata_test_index",
+    "ORNL_Bioscales2",
+    "ORNL_Populus_LC_MSMS"
+]
+
+
 @st.cache_data(ttl=3600)
-def get_database_options():
+def fetch_database_options():
     url = "https://fasst.gnps2.org/libraries"
-    fallback_options = [
-        "gnpsdata_index",
-        "gnpslibrary",
-        "massivedata_index",
-        "massivekb_index",
-        "metabolomicspanrepo_index_latest",
-        "metabolomicspanrepo_index_nightly",
-        "panrepo_2024_11_12",
-        "panrepo_2025_06_18",
-        "ptfi2_index",
-        "gnpsdata_test_index",
-        "ORNL_Bioscales2",
-        "ORNL_Populus_LC_MSMS"
-    ]
+    response = requests.get(url, timeout=5)
+    response.raise_for_status()
+    libraries = response.json()
+    return [lib['value'] for lib in libraries]
+
+
+def get_database_options():
     with st.spinner('Retrieving MASST Database options...'):
         try:
-            response = requests.get(url, timeout=5)  # 10 second timeout
-            response.raise_for_status()
-            libraries = response.json()
-            return [lib['value'] for lib in libraries]
+            return fetch_database_options()
         except requests.Timeout:
             st.toast("Database Request timed out. Using fallback database options.", icon="⚠️")
-            return fallback_options
         except requests.RequestException as e:
             st.toast(f"Error fetching database options: {e}", icon="❌")
             st.toast("Using fallback database options.", icon="⚠️")
-            return fallback_options
+        return FALLBACK_OPTIONS
 
 
 def create_masst_sidebar():
