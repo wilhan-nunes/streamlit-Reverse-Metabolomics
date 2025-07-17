@@ -3,7 +3,10 @@ import streamlit as st
 
 def welcome_page():
     st.markdown("""
-    ### 📖 How to use this tool:
+    ### 📖 Citation
+    Charron-Lamoureux, V., Mannochio-Russo, H., Lamichhane, S. et al. A guide to reverse metabolomics—a framework for big data discovery strategy. Nat Protoc (2025). https://doi.org/10.1038/s41596-024-01136-2
+    
+    ### 📘 How to use this tool:
 
     1. **Enter or upload USIs**: In the sidebar, input your USIs (Universal Spectrum Identifiers) or load the example data.
     2. **Set MASST parameters**: Adjust search parameters as needed.

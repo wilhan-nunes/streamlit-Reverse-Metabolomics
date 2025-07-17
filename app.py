@@ -272,6 +272,24 @@ with st.sidebar:
         st.session_state["use_example"] = False
         st.rerun()
 
+    st.subheader("Contributors")
+    st.markdown(
+        """
+    - [Vincent Lamoureux PhD](https://scholar.google.com/citations?user=_OboZ0YAAAAJ) - UC San Diego
+    - [Helena Russo PhD](https://sites.google.com/view/helenamrusso/home) - UC San Diego
+    - [Prajit Rajkumar](https://scholar.google.com/citations?user=_iKPhb0AAAAJ) - UC San Diego
+    - [Wilhan Nunes PhD](https://scholar.google.com/citations?user=4cPVoeIAAAAJ) - UC San Diego
+    - [Mingxun Wang PhD](https://www.cs.ucr.edu/~mingxunw/) - UC Riverside
+    """
+    )
+
+    st.subheader("Documentations and Resources")
+    st.markdown("""
+        - [Other Similar Tools](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/toolindex/)
+        - [MASST Documentation](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/masst/)
+        - [Fast Search Page](https://fasst.gnps2.org/fastsearch/)
+        """)
+
 # Download ReDU metadata if not exists
 if not os.path.exists('REDU_metadata.tsv'):
     from download_redu import download_redu_metadata
