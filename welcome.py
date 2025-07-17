@@ -24,4 +24,12 @@ def welcome_page():
     - Use clustering options to reveal patterns in your data.
     - Download tables and images for offline analysis or publication.
     - Example data is available for quick testing and demonstration.
+    
+    ---
+    """)
+
+    st.info("""
+        - This application is part of the GNPS downstream analysis ecosystem known as **MetaboApps**.
+        - If you have feedback or suggestions, feel free to reach out to the development team.
+        - [Checkout other tools](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/toolindex/#gnps2-web-tools)
     """)
