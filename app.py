@@ -278,9 +278,6 @@ if not os.path.exists('REDU_metadata.tsv'):
     with st.spinner("Downloading ReDU metadata file... this may take a while!"):
         download_redu_metadata('REDU_metadata.tsv')
 
-
-
-
 if st.session_state.get('run_masst_query', False):
     if len(query_df) > 0:
         with st.spinner("Running MASST query..."):

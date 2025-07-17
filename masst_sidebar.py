@@ -123,11 +123,11 @@ def create_usi_input():
         if 'usi_data' not in st.session_state:
             st.session_state.usi_data = pd.DataFrame({
                 'usi': [
-                    'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
-                    'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601',
-                    'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00011434738'
+                    'USI-1',
+                    'USI-2',
+                    'USI-3'
                 ],
-                'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
+                'compound_name': ['Compound-name-1', 'Compound-name-2', 'Compound-name-3']
             })
 
         # Data editor
@@ -139,7 +139,7 @@ def create_usi_input():
                 "usi": st.column_config.TextColumn(
                     "USI",
                     help="Universal Spectrum Identifier",
-                    width="medium"
+                    width="small"
                 ),
                 "compound_name": st.column_config.TextColumn(
                     "Compound Name",
