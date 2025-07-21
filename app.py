@@ -8,6 +8,7 @@ import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
 import subprocess
+from streamlit.components.v1 import html
 
 from welcome import welcome_page
 
@@ -26,6 +27,10 @@ mpl.rcParams['ps.fonttype'] = 42
 app_version = "2025-07-17"
 git_hash = get_git_short_rev()
 repo_link = "https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics"
+
+# Add a tracking token
+html('<script async defer data-website-id="<your_website_id>" src="https://analytics.gnps2.org/umami.js"></script>', width=0, height=0)
+
 
 st.set_page_config(
     page_title="Reverse Metabolomics Analysis",
