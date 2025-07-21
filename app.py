@@ -4,31 +4,54 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import seaborn as sns
-import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
+import subprocess
+from streamlit.components.v1 import html
+
+from welcome import welcome_page
+
+
+def get_git_short_rev():
+    try:
+        return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL).decode().strip()
+    except subprocess.CalledProcessError:
+        return ".git/ not found"
 
 # Configure matplotlib for PDF output
 mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype'] = 42
 
-#TODO: Bump version
-app_version = "2025-06-30"
+# TODO: Bump version
+app_version = "2025-07-17"
+git_hash = get_git_short_rev()
+repo_link = "https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics"
 
-menu_items = {"about": f"**App version: {app_version}"}
+# Add a tracking token
+html('<script async defer data-website-id="<your_website_id>" src="https://analytics.gnps2.org/umami.js"></script>', width=0, height=0)
 
-# Set page config
+
 st.set_page_config(
     page_title="Reverse Metabolomics Analysis",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded",
-    menu_items=menu_items,
+    menu_items={"About": (f"**App version**: {app_version} | "
+                          f"[**Git Hash**: {git_hash}]({repo_link}/commit/{git_hash})")},
 )
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
 st.markdown("Edit entries in the sidebar to analyze fastMASST results with interactive visualizations")
+
+
+def check_memory_usage():
+    """Check current memory usage and warn if high"""
+    import psutil
+    memory_percent = psutil.virtual_memory().percent
+    if memory_percent > 80:
+        st.warning(f"High memory usage detected: {memory_percent:.1f}%. Consider reducing dataset size.")
+    return memory_percent
 
 
 # Create custom colormap
@@ -98,6 +121,61 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
     return pivot_table
 
 
+@st.cache_data
+def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
+                          tolerance: float, organism_filter: str = "All organisms"):
+    """Load and process data with pre-loaded ReDU dataframe"""
+
+    usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
+    compound_names = list(usis_table['compound_name'])
+
+    df_combined = fastmasst_results.copy()
+    # filter for tolerance
+    df_combined = df_combined[(df_combined['Delta Mass'] >= -tolerance) & (df_combined['Delta Mass'] <= tolerance)]
+    df_combined['Compound'] = df_combined['query_usi'].apply(lambda x: usi_to_name.get(x, 'Unknown'))
+
+    # Create filepath column
+    df_combined['filepath'] = df_combined['Dataset'] + "/" + df_combined['USI'].str.split('/').str[-1]
+    df_combined['filepath'] = df_combined['filepath'].str.split(':').str[0]
+    df_combined['filepath'] = df_combined['filepath'].str.replace('.mzML', '').str.replace('.mzXML', '')
+
+    # Merge datasets (df_redu is already processed)
+    df_merged = pd.merge(df_combined, df_redu, left_on='filepath', right_on='filepath', how='left',
+                         suffixes=('_fasst', '_redu'))
+
+    # Standardize body part names
+    if 'UBERONBodyPartName' in df_merged.columns:
+        body_part_replacements = {
+            'skin of trunk': 'skin',
+            'skin of pes': 'skin',
+            'head or neck skin': 'skin',
+            'axilla skin': 'skin',
+            'skin of manus': 'skin',
+            'arm skin': 'skin',
+            'blood plasma': 'blood',
+            'blood serum': 'blood'
+        }
+
+        for old, new in body_part_replacements.items():
+            df_merged['UBERONBodyPartName'] = df_merged['UBERONBodyPartName'].str.replace(old, new)
+
+    taxonomy_filters = {
+        "Humans": ['9606|Homo sapiens'],
+        "Rodents": ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
+                    '10116|Rattus norvegicus']
+    }
+
+    if organism_filter in taxonomy_filters:
+        selected_taxa = taxonomy_filters[organism_choice]
+        df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(selected_taxa)]
+        df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(selected_taxa)]
+        return df_filtered, df_redu_filtered
+
+    else:
+        return df_merged, df_redu
+
+
+
 def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
                    col_cluster=False, row_cluster=False, width=2, height=8, ):
     """Create heatmap visualization."""
@@ -122,7 +200,7 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
     fig.ax_heatmap.set_xticklabels(fig.ax_heatmap.get_xticklabels(), rotation=90)
 
     cax = fig.ax_cbar
-    cax.set_position([-0.25, -0.15, .3, .05])
+    cax.set_position((-0.25, -0.15, .3, .05))
     cbar = fig.ax_heatmap.collections[0].colorbar
 
     if log_scale:
@@ -142,124 +220,123 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
 
     return fig
 
+# Cache the ReDU dataframe loading
+@st.cache_data
+def load_redu_data():
+    """Load ReDU metadata file and return as DataFrame"""
+    try:
+        df_redu = pd.read_csv('REDU_metadata.tsv', sep='\t')
+        # Process ReDU table
+        df_redu['filename_2'] = df_redu['filename'].str.split('/').str[-1]
+        df_redu['filename_2'] = df_redu['filename_2'].str.replace('.mzML', '').str.replace('.mzXML', '')
+        df_redu['filepath'] = df_redu['ATTRIBUTE_DatasetAccession'].astype(str) + '/' + df_redu['filename_2'].astype(str)
+        return df_redu
+    except Exception as e:
+        st.error(f"Error loading ReDU metadata: {str(e)}")
+        return None
+
+
 
 # Sidebar for inputs
-st.sidebar.header("📁 Data Input")
+with st.sidebar:
+    st.header("📁 Data Input")
 
-# Example data option
-use_example = st.sidebar.checkbox("Load example data", value=False, help="Use built-in example files instead of uploading your own", key='load_example_checkbox')
+    # Example data option
+    use_example = st.checkbox("Load example data", value=False, help="Use built-in example files instead of uploading your own", key='use_example')
 
+    if not use_example:
+        from masst_sidebar import create_masst_sidebar, create_usi_input
+        from masst_client import masst_query_all
+
+        usi_data = create_usi_input()
+        masst_query_params = create_masst_sidebar()
+        # Filter out empty rows
+        query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
+
+        st.session_state.masst_query_params = masst_query_params
+        st.session_state['run_masst_query'] = st.button("Run MASST Query", icon="🔎", type="primary", use_container_width=True)
+
+    else:
+        results = pd.read_csv('example_data/his-c4-phe-c4-phe-ca.csv')
+        usi_data = pd.DataFrame({
+            'usi': [
+                'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
+                'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601',
+                'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00011434738'
+            ],
+            'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
+        })
+        st.write(usi_data)
+        mass_tolerance = st.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0,
+                                                 value=0.02, step=0.01)
+        if st.button('Run Example', icon="🧪", type="primary", use_container_width=True):
+            st.session_state.results = results
+
+    if st.button("Clear All Cache", type="secondary", icon="🗑️",use_container_width=True):
+        st.session_state.clear()
+        st.session_state["use_example"] = False
+        st.rerun()
+
+    st.subheader("Contributors")
+    st.markdown(
+        """
+    - [Vincent Lamoureux PhD](https://scholar.google.com/citations?user=_OboZ0YAAAAJ) - UC San Diego
+    - [Helena Russo PhD](https://sites.google.com/view/helenamrusso/home) - UC San Diego
+    - [Prajit Rajkumar](https://scholar.google.com/citations?user=_iKPhb0AAAAJ) - UC San Diego
+    - [Wilhan Nunes PhD](https://scholar.google.com/citations?user=4cPVoeIAAAAJ) - UC San Diego
+    - [Mingxun Wang PhD](https://www.cs.ucr.edu/~mingxunw/) - UC Riverside
+    """
+    )
+
+    st.subheader("Documentations and Resources")
+    st.markdown("""
+        - [Other Similar Tools](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/toolindex/)
+        - [MASST Documentation](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/masst/)
+        - [Fast Search Page](https://fasst.gnps2.org/fastsearch/)
+        """)
+
+# Download ReDU metadata if not exists
 if not os.path.exists('REDU_metadata.tsv'):
     from download_redu import download_redu_metadata
     with st.spinner("Downloading ReDU metadata file... this may take a while!"):
         download_redu_metadata('REDU_metadata.tsv')
 
-if "redu_file" not in st.session_state:
-    st.session_state['redu_file'] = open("REDU_metadata.tsv", "rb")
-    st.toast("Reading Redu metadata file!")
+if st.session_state.get('run_masst_query', False):
+    if 0 < len(query_df) <= 10:
+        with st.spinner("Running MASST query..."):
+            # Here you would call your imported masst_query_all function
+            results = masst_query_all(query_df, **masst_query_params)
+            st.success(f"Query performed with {len(query_df)} USIs with parameters: {masst_query_params}")
+            st.session_state.results = results
+            # st.write(results)
+    elif len(query_df) > 10:
+        st.error("The query is limited to 10 USIs. Please, use the [Fast Batch](https://gnps2.org/workflowinput?workflowname=fasst_batch_workflow)"
+                 " workflow fore more flexibility.", icon="⚠️")
+    else:
+        st.error("Please add at least one USI to query", icon="⚠️")
 
-if not use_example:
-    from masst_sidebar import create_masst_sidebar, create_usi_input, masst_query_all
+if "results" in st.session_state:
+    # Load ReDU data once and cache it
+    df_redu = load_redu_data()
+    if df_redu is None:
+        st.error("Failed to load ReDU metadata file")
+        st.stop()
 
-    usi_data = create_usi_input()
-    masst_query_params = create_masst_sidebar()
-    st.session_state.masst_query_params = masst_query_params
-    # Filter out empty rows
-    query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
-
-    if st.button("Run MASST Query", type="primary"):
-        if len(query_df) > 0:
-            with st.spinner("Running MASST query..."):
-                # Here you would call your imported masst_query_all function
-                results = masst_query_all(query_df, **masst_query_params)
-                st.session_state.results = results
-                st.success(f"Query performed with {len(query_df)} USIs with parameters: {masst_query_params}")
-                # st.write(results)
-        else:
-            st.error("Please add at least one USI to query")
-
-else:
-    results = pd.read_csv('example_data/his-c4-phe-c4-phe-ca.csv')
-    st.session_state.results = results
-    usi_data = pd.DataFrame({
-                'usi': [
-                    'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
-                    'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601',
-                    'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00011434738'
-                ],
-                'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
-            })
-
-
-if "results" in st.session_state and st.session_state.redu_file:
-    redu_file = st.session_state['redu_file']
     results = st.session_state.results
-    # Load and process data
-    @st.cache_data
-    def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table:pd.DataFrame, redu_file,  tolerance: float):
 
-        usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
-        compound_names = list(usis_table['compound_name'])
-
-        df_combined = fastmasst_results.copy()
-        # filter for tolerance
-        df_combined = df_combined[(df_combined['Delta Mass'] >= -tolerance) & (df_combined['Delta Mass'] <= tolerance)]
-        df_combined['Compound'] = df_combined['query_usi'].apply(lambda x: usi_to_name.get(x, 'Unknown'))
-
-        # Create filepath column
-        df_combined['filepath'] = df_combined['Dataset'] + "/" + df_combined['USI'].str.split('/').str[-1]
-        df_combined['filepath'] = df_combined['filepath'].str.split(':').str[0]
-        df_combined['filepath'] = df_combined['filepath'].str.replace('.mzML', '').str.replace('.mzXML', '')
-
-        # Load ReDU table
-        separator = '\t' if redu_file.name.endswith('.tsv') else ','
-        df_redu = pd.read_csv(redu_file, sep=separator)
-
-        # Process ReDU table
-        df_redu['filename_2'] = df_redu['filename'].str.split('/').str[-1]
-        df_redu['filename_2'] = df_redu['filename_2'].str.replace('.mzML', '').str.replace('.mzXML', '')
-        df_redu['filepath'] = df_redu['ATTRIBUTE_DatasetAccession'].astype(str) + '/' + df_redu['filename_2'].astype(
-            str)
-
-        # Merge datasets
-        df_merged = pd.merge(df_combined, df_redu, left_on='filepath', right_on='filepath', how='left', suffixes=('_fasst', '_redu'))
-
-        # Standardize body part names
-        if 'UBERONBodyPartName' in df_merged.columns:
-            body_part_replacements = {
-                'skin of trunk': 'skin',
-                'skin of pes': 'skin',
-                'head or neck skin': 'skin',
-                'axilla skin': 'skin',
-                'skin of manus': 'skin',
-                'arm skin': 'skin',
-                'blood plasma': 'blood',
-                'blood serum': 'blood'
-            }
-
-            for old, new in body_part_replacements.items():
-                df_merged['UBERONBodyPartName'] = df_merged['UBERONBodyPartName'].str.replace(old, new)
-
-        return df_merged, df_redu, compound_names
-
-
-    # Load data
     try:
-        #this deals with example data where no masst_query_params are set
         if use_example:
-            mass_tolerance = st.sidebar.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0, value=0.02, step=0.01,)
             st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
         else:
             masst_query_params = st.session_state.masst_query_params
-            mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)  # Default to 0.02 if not set
+            mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)
 
-        df_merged, df_redu, _ = load_and_process_data(results, usi_data, redu_file, mass_tolerance)
+               # Organism selection
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("🧬 Organism Filter")
 
-        # Organism selection
-        with st.sidebar:
-            st.header("🧬 Organism Filter")
-
-            available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
+            # available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
 
             organism_choice = st.selectbox(
                 "Select organism:",
@@ -267,23 +344,11 @@ if "results" in st.session_state and st.session_state.redu_file:
                 help="Filter data by organism type"
             )
 
-            if organism_choice == 'Humans':
-                df_filtered = df_merged[df_merged['NCBITaxonomy'] == '9606|Homo sapiens']
-                df_redu_filtered = df_redu[df_redu['NCBITaxonomy'] == '9606|Homo sapiens']
-            elif organism_choice == 'Rodents':
-                rodent_list = ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
-                               '10116|Rattus norvegicus']
-                df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(rodent_list)]
-                df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(rodent_list)]
-            else:
-                df_filtered = df_merged
-                df_redu_filtered = df_redu
+            df_filtered, df_redu_filtered = load_and_process_data(results, usi_data, df_redu, mass_tolerance, organism_choice)
 
-        st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice.lower()}")
-
-        with st.sidebar:
+        with col2:
             # Analysis options
-            st.header("📈 Analysis Options")
+            st.write("📈 Analysis Options")
 
             available_columns = [col for col in df_filtered.columns if
                                  col in ['UBERONBodyPartName', 'DOIDCommonName', 'ATTRIBUTE_SubjectGender',
@@ -294,6 +359,11 @@ if "results" in st.session_state and st.session_state.redu_file:
                 options=available_columns,
                 help="Choose which ReDU column to analyze"
             )
+
+            unique_options = list(df_filtered[analysis_column].unique())
+            variable_to_exclude = st.multiselect("Exclude from analysis (optional)", options=unique_options)
+
+        st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice.lower()}")
 
         # Main content
         col1, col2 = st.columns([1, 2])
@@ -378,10 +448,15 @@ if "results" in st.session_state and st.session_state.redu_file:
                         df_redu_counts = None
                         redu_count_col = None
 
-                        if normalize_redu and analysis_column in ['DOIDCommonName']:
+                        if normalize_redu:
                             df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
                             df_redu_counts.columns = [analysis_column, f'{analysis_column}_counts']
                             redu_count_col = f'{analysis_column}_counts'
+
+                        if variable_to_exclude:
+                            drop_mask = df_filtered[analysis_column].isin(variable_to_exclude)
+                            indices_to_drop = df_filtered[drop_mask].index
+                            df_filtered = df_filtered.drop(indices_to_drop)
 
                         pivot_table = prepare_pivot_table(
                             df_filtered,
@@ -458,23 +533,4 @@ if "results" in st.session_state and st.session_state.redu_file:
 else:
     st.info("👈 Please edit the USI input data table in the sidebar, choose your parameters and click Run MASST Query to start.")
 
-    st.markdown("""
-    ### 📖 How to use this tool:
-
-    1. **Enter or upload USIs**: In the sidebar, input your USIs (Universal Spectrum Identifiers) or load the example data.
-    2. **Set MASST parameters**: Adjust search parameters as needed.
-    3. **Run MASST Query**: Click the "Run MASST Query" button to retrieve fastMASST results.
-    4. **Adjust analysis settings**: Set delta mass tolerance, select organism, and choose the analysis variable (e.g., body part, disease, gender, or age).
-    5. **Generate visualizations**: Select heatmap options and click "Generate Heatmap" to view interactive results.
-    6. **Download results**: Export summary tables and heatmaps as CSV or PNG for further analysis.
-
-    ### 📊 Available visualizations:
-    - **Raw counts**: Direct spectral match counts.
-    - **Log-transformed counts**: Log2-transformed counts for improved visualization of low-abundance features.
-    - **ReDU-normalized counts**: Counts normalized by sample availability in the ReDU database.
-
-    ### 💡 Tips:
-    - Use clustering options to reveal patterns in your data.
-    - Download tables and images for offline analysis or publication.
-    - Example data is available for quick testing and demonstration.
-    """)
+    welcome_page()

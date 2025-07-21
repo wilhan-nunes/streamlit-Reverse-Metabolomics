@@ -3,6 +3,14 @@ import shutil
 from pathlib import Path
 import requests
 import time
+import logging
+
+# Setup logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 def download_redu_metadata(output_path):
