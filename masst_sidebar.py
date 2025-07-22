@@ -51,7 +51,7 @@ def create_masst_sidebar():
             database = st.selectbox(
                 "Database",
                 options=options_list,
-                index=options_list.index("panrepo_2024_11_12") if "panrepo_2024_11_12" in options_list else 0,
+                index=options_list.index("metabolomicspanrepo_index_latest") if "metabolomicspanrepo_index_latest" in options_list else 0,
                 help="Type of database to search"
             )
 
