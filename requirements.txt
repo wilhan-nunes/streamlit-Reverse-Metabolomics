@@ -13,3 +13,4 @@ rdkit
 Pillow
 requests-cache
 tqdm
+git+https://github.com/Wang-Bioinformatics-Lab/GNPSDataPackage.git

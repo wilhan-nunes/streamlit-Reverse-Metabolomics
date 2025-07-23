@@ -3,25 +3,8 @@ import argparse
 import requests
 import requests_cache
 from tqdm import tqdm
+from gnpsdata import fasst
 #requests_cache.install_cache('demo_cache')
-
-def query_usi(usi, database, analog=False, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
-    URL = "https://fasst.gnps2.org/search"
-
-    params = {
-        "usi": usi,
-        "library": database,
-        "analog": "Yes" if analog else "No",
-        "pm_tolerance": precursor_mz_tol,
-        "fragment_tolerance": fragment_mz_tol,
-        "cosine_threshold": min_cos,
-    }
-
-    r = requests.get(URL, params=params, timeout=50)
-    
-    r.raise_for_status()
-
-    return r.json()
 
 def masst_query_all(query_df, database, masst_type, analog=False, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
     output_results_list = []
@@ -31,16 +14,10 @@ def masst_query_all(query_df, database, masst_type, analog=False, precursor_mz_t
 
             usi = query_element["usi"]
 
-            results_dict = query_usi(usi, database,
+            results_dict = fasst.query_fasst_usi(usi, database,
                 analog=analog, precursor_mz_tol=precursor_mz_tol, 
                 fragment_mz_tol=fragment_mz_tol, min_cos=min_cos)
             results_df = pd.DataFrame(results_dict["results"])
-
-            # TODO: Support munging of microbemasst results
-            #if masst_type == "microbemasst":
-                # Lets do additionally processing
-            #    print("MICROBEMASST")
-            # TODO: Merge with metadata automatically
 
             results_df["query_usi"] = usi
             if "flag" in query_element:
