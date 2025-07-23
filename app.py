@@ -7,7 +7,6 @@ import seaborn as sns
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
-import subprocess
 from streamlit.components.v1 import html
 
 from welcome import welcome_page
@@ -15,9 +14,13 @@ from welcome import welcome_page
 
 def get_git_short_rev():
     try:
-        return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL).decode().strip()
-    except subprocess.CalledProcessError:
+        with open('.git/logs/HEAD', 'r') as f:
+            last_line = f.readlines()[-1]
+            hash_val = last_line.split()[1]
+        return hash_val[:7]
+    except Exception:
         return ".git/ not found"
+
 
 # Configure matplotlib for PDF output
 mpl.rcParams['pdf.fonttype'] = 42
