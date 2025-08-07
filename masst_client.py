@@ -14,7 +14,7 @@ def masst_query_all(query_df, database, masst_type, analog=False, precursor_mz_t
 
             usi = query_element["usi"]
 
-            results_dict = fasst.query_fasst_usi(usi, database,
+            results_dict = fasst.query_fasst_api_usi(usi, database,
                 analog=analog, precursor_mz_tol=precursor_mz_tol, 
                 fragment_mz_tol=fragment_mz_tol, min_cos=min_cos)
             results_df = pd.DataFrame(results_dict["results"])
