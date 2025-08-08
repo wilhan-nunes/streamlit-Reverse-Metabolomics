@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import seaborn as sns
+import scipy.spatial.distance as ssd
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
@@ -404,33 +405,18 @@ if "results" in st.session_state:
             clustering_metrics = {
                 "Bray-Curtis": "braycurtis",
                 "Canberra": "canberra",
-                "Chebyshev": "chebyshev",
-                "City Block (Manhattan)": "cityblock",
                 "Correlation": "correlation",
                 "Cosine": "cosine",
-                "Dice": "dice",
                 "Euclidean": "euclidean",
-                "Hamming": "hamming",
-                "Jaccard": "jaccard",
-                "Jensen-Shannon": "jensenshannon",
-                "Kulczynski": "kulczynski1",
-                "Mahalanobis": "mahalanobis",
-                "Matching": "matching",
-                "Minkowski": "minkowski",
-                "Rogers-Tanimoto": "rogerstanimoto",
-                "Russell-Rao": "russellrao",
-                "Standardized Euclidean": "seuclidean",
-                "Sokal-Michener": "sokalmichener",
-                "Sokal-Sneath": "sokalsneath",
-                "Squared Euclidean": "sqeuclidean",
-                "Yule": "yule"
+                "Jaccard": "jaccard"
             }
 
             with col2:
                 metric = st.selectbox(
                     "Clustering metric:",
                     options=list(clustering_metrics.keys()),
-                    help='The distance metric to use. See scipy.spatial.distance.pdist documentation for more info.'
+                    help='The distance metric to use. See scipy.spatial.distance.pdist documentation for all available metrics.',
+                    accept_new_options=True,
                 )
 
             col1, col2 = st.columns(2)
@@ -471,10 +457,18 @@ if "results" in st.session_state:
                             redu_count_col=redu_count_col
                         )
 
+                        if metric in clustering_metrics.keys():
+                            metric = clustering_metrics[metric]
+                        elif metric in ssd._METRICS.keys():
+                            metric = metric
+                        else:
+                            metric = 'euclidean'
+                            st.toast('Clustering metric not recognized, using default: euclidean', icon="⚠️")
+
                         fig = create_heatmap(
                             pivot_table,
                             analysis_column,
-                            metric=clustering_metrics.get(metric, 'euclidean'),
+                            metric=metric,
                             log_scale=log_transform,
                             normalize=normalize_redu,
                             col_cluster=col_cluster,
