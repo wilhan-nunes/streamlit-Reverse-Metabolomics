@@ -319,7 +319,7 @@ if st.session_state.get('run_masst_query', False):
     else:
         st.error("Please add at least one USI to query", icon="⚠️")
 
-if "results" in st.session_state:
+if "results" in st.session_state and len(st.session_state.results) > 0:
     # Load ReDU data once and cache it
     df_redu = load_redu_data()
     if df_redu is None:
@@ -526,6 +526,9 @@ if "results" in st.session_state:
         st.error(f"❌ Error processing data: {str(e)}")
         st.info("Please check your file formats and ensure they match the expected structure.")
         raise
+
+elif "results" in st.session_state and len(st.session_state.get('results', [])) == 0:
+    st.warning("MASST query returned no results. Try again modifying the parameters in the sidebar or using a different set of USIs.", icon="⚠️")
 
 else:
     st.info("👈 Please edit the USI input data table in the sidebar, choose your parameters and click Run MASST Query to start.")
