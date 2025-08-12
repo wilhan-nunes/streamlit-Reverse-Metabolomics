@@ -127,7 +127,7 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
 
 @st.cache_data
 def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
-                          tolerance: float, organism_filter: str = "All organisms"):
+                          tolerance: float, organism_filter: str | list = "All organisms"):
     """Load and process data with pre-loaded ReDU dataframe"""
 
     usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
@@ -168,15 +168,20 @@ def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFr
         "Rodents": ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
                     '10116|Rattus norvegicus']
     }
+    if isinstance(organism_filter, str):
+        if organism_filter in taxonomy_filters:
+            selected_taxa = taxonomy_filters[organism_choice]
+            df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(selected_taxa)]
+            df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(selected_taxa)]
+            return df_filtered, df_redu_filtered
+        elif organism_filter == "All organisms":
+            return df_merged, df_redu
+    else:
+        df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(organism_choice)]
+        df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(organism_choice)]
 
-    if organism_filter in taxonomy_filters:
-        selected_taxa = taxonomy_filters[organism_choice]
-        df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(selected_taxa)]
-        df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(selected_taxa)]
         return df_filtered, df_redu_filtered
 
-    else:
-        return df_merged, df_redu
 
 
 
@@ -344,10 +349,17 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
             organism_choice = st.selectbox(
                 "Select organism:",
-                options=['Humans', 'Rodents', 'All organisms'],
+                options=['Humans', 'Rodents', 'All organisms', "Manual Entry"],
                 help="Filter data by organism type"
             )
 
+            if organism_choice == "Manual Entry":
+                organism_choice = st.multiselect(
+                    "Enter NCBI Taxonomy ID or scientific name separated by comma",
+                    options=df_redu['NCBITaxonomy'].dropna().unique().tolist(),
+                    default=['9606|Homo sapiens'],
+                    help="Enter a specific NCBI Taxonomy ID or scientific name to filter data"
+                )
             df_filtered, df_redu_filtered = load_and_process_data(results, usi_data, df_redu, mass_tolerance, organism_choice)
 
         with col2:
@@ -366,8 +378,10 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
             unique_options = list(df_filtered[analysis_column].unique())
             variable_to_exclude = st.multiselect("Exclude from analysis (optional)", options=unique_options)
-
-        st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice.lower()}")
+        if isinstance(organism_choice, list):
+            st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {', '.join(organism_choice)}")
+        else:
+            st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice}")
 
         # Main content
         col1, col2 = st.columns([1, 2])
@@ -518,7 +532,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
         st.download_button(
             label="📥 Download full merged dataset",
             data=csv_full,
-            file_name=f"merged_dataset_{organism_choice.lower().replace(' ', '_')}.csv",
+            file_name=f"merged_dataset.csv",
             mime="text/csv"
         )
 
