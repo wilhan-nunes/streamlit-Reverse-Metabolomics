@@ -126,9 +126,9 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
 
 
 @st.cache_data
-def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
-                          tolerance: float, organism_filter: str | list = "All organisms"):
-    """Load and process data with pre-loaded ReDU dataframe"""
+def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
+                        tolerance: float):
+    """Load and create the merged dataframe with tolerance filtering"""
 
     usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
     compound_names = list(usis_table['compound_name'])
@@ -163,25 +163,31 @@ def load_and_process_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFr
         for old, new in body_part_replacements.items():
             df_merged['UBERONBodyPartName'] = df_merged['UBERONBodyPartName'].str.replace(old, new)
 
+    return df_merged
+
+
+def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_filter: str | list = "All organisms"):
+    """Filter the merged dataframe according to organism inputs"""
+
     taxonomy_filters = {
         "Humans": ['9606|Homo sapiens'],
         "Rodents": ['10088|Mus', '10090|Mus musculus', '10105|Mus minutoides', '10114|Rattus',
                     '10116|Rattus norvegicus']
     }
+
     if isinstance(organism_filter, str):
         if organism_filter in taxonomy_filters:
-            selected_taxa = taxonomy_filters[organism_choice]
+            selected_taxa = taxonomy_filters[organism_filter]
             df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(selected_taxa)]
             df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(selected_taxa)]
             return df_filtered, df_redu_filtered
         elif organism_filter == "All organisms":
             return df_merged, df_redu
     else:
-        df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(organism_choice)]
-        df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(organism_choice)]
-
+        # organism_filter is a list
+        df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(organism_filter)]
+        df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(organism_filter)]
         return df_filtered, df_redu_filtered
-
 
 
 
@@ -350,17 +356,25 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
             organism_choice = st.selectbox(
                 "Select organism:",
                 options=['Humans', 'Rodents', 'All organisms', "Manual Entry"],
-                help="Filter data by organism type"
+                help="Filter data by organism type",
+                key='organism_choice'
             )
 
             if organism_choice == "Manual Entry":
                 organism_choice = st.multiselect(
-                    "Enter NCBI Taxonomy ID or scientific name separated by comma",
+                    "Search NCBI Taxonomy ID or scientific to filter the list",
                     options=df_redu['NCBITaxonomy'].dropna().unique().tolist(),
                     default=['9606|Homo sapiens'],
-                    help="Enter a specific NCBI Taxonomy ID or scientific name to filter data"
+                    help="Enter a specific NCBI Taxonomy ID or scientific name (multiselect)",
+                    key='manual_organism_choice',
                 )
-            df_filtered, df_redu_filtered = load_and_process_data(results, usi_data, df_redu, mass_tolerance, organism_choice)
+        if "df_merged" not in st.session_state:
+            df_merged = load_and_merge_data(results, usi_data, df_redu, mass_tolerance)
+            st.session_state.df_merged = df_merged
+        else:
+            df_merged = st.session_state.df_merged
+
+        df_filtered, df_redu_filtered = filter_by_organism(df_merged, df_redu, organism_filter=organism_choice)
 
         with col2:
             # Analysis options
