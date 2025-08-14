@@ -206,7 +206,7 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
         yticklabels=pivot_table[variable],
         linewidths=0.005,
         linecolor='white',
-        cbar_kws={'orientation': 'horizontal'},
+        cbar_kws={'orientation': 'vertical'},
         figsize=(width, height)
     )
 
@@ -215,7 +215,7 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
     fig.ax_heatmap.set_xticklabels(fig.ax_heatmap.get_xticklabels(), rotation=90)
 
     cax = fig.ax_cbar
-    cax.set_position((-0.25, -0.15, .3, .05))
+    cax.set_position((.8, 0.3, .05, .3))
     cbar = fig.ax_heatmap.collections[0].colorbar
 
     if log_scale:
@@ -287,7 +287,7 @@ with st.sidebar:
         if st.button('Run Example', icon="🧪", type="primary", use_container_width=True):
             st.session_state.results = results
 
-    if st.button("Clear All Cache", type="secondary", icon="🗑️",use_container_width=True):
+    if st.button("Clear Cache", type="secondary", icon="🗑️",use_container_width=True):
         st.session_state.clear()
         st.session_state["use_example"] = False
         st.rerun()
@@ -375,13 +375,18 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
             df_merged = st.session_state.df_merged
 
         df_filtered, df_redu_filtered = filter_by_organism(df_merged, df_redu, organism_filter=organism_choice)
+        rename_dict = {"UBERONBodyPartName": "Body Part",
+                       "DOIDCommonName": "Disease"
+                       }
+        df_filtered.rename(columns=rename_dict, inplace=True)
+        df_redu_filtered.rename(columns=rename_dict, inplace=True)
 
         with col2:
             # Analysis options
             st.write("📈 Analysis Options")
 
             available_columns = [col for col in df_filtered.columns if
-                                 col in ['UBERONBodyPartName', 'DOIDCommonName', 'ATTRIBUTE_SubjectGender',
+                                 col in ['Body Part', 'Disease', 'ATTRIBUTE_SubjectGender',
                                          'ATTRIBUTE_Age']]
 
             analysis_column = st.selectbox(
@@ -504,9 +509,10 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                             width=heatmap_width,
                             height=heatmap_height
                         )
-                        _, fig_col, _ = st.columns([1, 3, 1])
-                        with fig_col:
-                            st.pyplot(fig.figure)
+                        with st.container(border=True):
+                            _, fig_col, _ = st.columns([1, 3, 1])
+                            with fig_col:
+                                st.pyplot(fig.figure)
 
                         # Download options
                         col_a, col_b = st.columns(2)
