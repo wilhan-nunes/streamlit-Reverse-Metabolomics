@@ -504,8 +504,9 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                             width=heatmap_width,
                             height=heatmap_height
                         )
-
-                        st.pyplot(fig.figure)
+                        _, fig_col, _ = st.columns([1, 3, 1])
+                        with fig_col:
+                            st.pyplot(fig.figure)
 
                         # Download options
                         col_a, col_b = st.columns(2)
@@ -514,30 +515,32 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                             # Download pivot table
                             csv_pivot = pivot_table.to_csv(index=False)
                             st.download_button(
-                                label="📥 Download pivot table",
+                                label="Download pivot table",
                                 data=csv_pivot,
                                 file_name=f"pivot_table_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.csv",
-                                mime="text/csv"
+                                mime="text/csv",
+                                icon=":material/download:"
                             )
 
                         with col_b:
                             # Download plot as PNG
                             img_buffer = io.BytesIO()
-                            fig.figure.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
+                            fig.figure.savefig(img_buffer, format='svg', bbox_inches='tight')
                             img_buffer.seek(0)
 
                             st.download_button(
-                                label="📥 Download heatmap (PNG)",
+                                label="Download heatmap (SVG)",
                                 data=img_buffer.getvalue(),
-                                file_name=f"heatmap_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.png",
-                                mime="image/png"
+                                file_name=f"heatmap_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.svg",
+                                mime="image/svg+xml",
+                                icon=":material/download:",
                             )
 
                     except Exception as e:
                         st.error(f"Error generating heatmap: {str(e)}")
 
         # Data preview
-        st.header("Data Preview")
+        st.header(":mag: Data Preview")
         st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
         st.dataframe(df_filtered.head(100))
 
