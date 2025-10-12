@@ -78,9 +78,13 @@ def analyze_counts(df, column_interest):
 
     df_counts = df[column_interest].value_counts().rename_axis(column_interest).reset_index(name='Counts_fastMASST')
 
-    compounds = df.groupby(column_interest)['Compound'].agg(
-        ['nunique', lambda x: ', '.join(map(str, x.unique()))]).reset_index()
-    compounds.columns = [column_interest, 'Compounds', 'CompoundsList']
+    compounds = df.groupby(column_interest).agg({
+        'Compound': ['nunique', lambda x: ', '.join(map(str, x.unique()))],
+        'ATTRIBUTE_DatasetAccession': lambda x: '; '.join(map(str, x.unique()))
+    }).reset_index()
+    # Flatten MultiIndex columns
+    compounds.columns = [column_interest, 'Compounds', 'CompoundsList', 'DatasetAccessions']
+
 
     combined = pd.merge(df_body_parts, df_counts, on=column_interest, how='left')
     combined = pd.merge(combined, compounds, on=column_interest, how='left')
