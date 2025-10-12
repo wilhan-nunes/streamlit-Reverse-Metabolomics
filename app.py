@@ -317,15 +317,15 @@ if not os.path.exists('REDU_metadata.tsv'):
         download_redu_metadata('REDU_metadata.tsv')
 
 if st.session_state.get('run_masst_query', False):
-    if 0 < len(query_df) <= 10:
+    if 0 < len(query_df) <= 20:
         with st.spinner("Running MASST query..."):
             # Here you would call your imported masst_query_all function
             results = masst_query_all(query_df, **masst_query_params)
             st.success(f"Query performed with {len(query_df)} USIs with parameters: {masst_query_params}")
             st.session_state.results = results
             # st.write(results)
-    elif len(query_df) > 10:
-        st.error("The query is limited to 10 USIs. Please, use the [Fast Batch](https://gnps2.org/workflowinput?workflowname=fasst_batch_workflow)"
+    elif len(query_df) > 20:
+        st.error("The query is limited to 20 USIs. Please, use the [Fast Batch](https://gnps2.org/workflowinput?workflowname=fasst_batch_workflow)"
                  " workflow fore more flexibility.", icon="⚠️")
     else:
         st.error("Please add at least one USI to query", icon="⚠️")

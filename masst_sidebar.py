@@ -44,7 +44,7 @@ def create_masst_sidebar():
     """Create sidebar widgets for MASST parameters and return the values"""
 
     with st.sidebar:
-        with st.expander("MASST Query Parameters", expanded=False):
+        with st.expander("MASST Query Parameters", icon=':material/settings:', expanded=False):
 
             # Database selection
             options_list = sorted(get_database_options())
