@@ -397,10 +397,14 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
             unique_options = list(df_filtered[analysis_column].unique())
             variable_to_exclude = st.multiselect("Exclude from analysis (optional)", options=unique_options)
-        if isinstance(organism_choice, list):
-            st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {', '.join(organism_choice)}")
+        if len(df_filtered) == 0:
+            st.warning(f"No data available for the selected organism filter: {', '.join(organism_choice)}. "
+                       f"Try selecting 'All organisms' or a different filter.", icon="⚠️")
         else:
-            st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice}")
+            if isinstance(organism_choice, list):
+                st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {', '.join(organism_choice)}")
+            else:
+                st.info(f"📊 Filtered data: {len(df_filtered):,} spectral matches for {organism_choice}")
 
         # Main content
         col1, col2 = st.columns([1, 2])
@@ -420,7 +424,8 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                     label="📥 Download counts table",
                     data=csv_counts,
                     file_name=f"counts_{analysis_column}.csv",
-                    mime="text/csv"
+                    mime="text/csv",
+                    disabled= not len(counts_table) > 0,
                 )
 
         with col2:
@@ -461,7 +466,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                 row_cluster = st.checkbox("Cluster rows", value=False)
                 heatmap_height = st.number_input("Heatmap height", min_value=4, max_value=15, value=4)
 
-            if st.button("🎨 Generate Heatmap"):
+            if st.button("🎨 Generate Heatmap", disabled= not len(df_filtered) > 0):
                 with st.spinner("Generating heatmap..."):
                     try:
                         log_transform = heatmap_type == 'Log-transformed counts'
@@ -556,7 +561,8 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
             label="📥 Download full merged dataset",
             data=csv_full,
             file_name=f"merged_dataset.csv",
-            mime="text/csv"
+            mime="text/csv",
+            disabled= not len(df_filtered) > 0,
         )
 
     except Exception as e:
