@@ -11,6 +11,7 @@ import io
 from streamlit.components.v1 import html
 
 from welcome import welcome_page
+from download_redu import load_redu
 
 
 def get_git_short_rev():
@@ -21,6 +22,16 @@ def get_git_short_rev():
         return hash_val[:7]
     except Exception:
         return ".git/ not found"
+
+@st.cache_data(ttl=3600) # this will allow the user to have a 1 hour window to explore the app before the Redu metadata is reloaded
+def load_redu_data():
+    """Load ReDU metadata file and return as DataFrame"""
+    try:
+        df = load_redu(max_age_days=30) # if the file is older than 30 days it will be re-downloaded
+        return df
+    except Exception as e:
+        st.error(f"Error loading ReDU metadata: {str(e)}")
+        return None
 
 
 # Configure matplotlib for PDF output
@@ -44,6 +55,12 @@ st.set_page_config(
     menu_items={"About": (f"**App version**: {app_version} | "
                           f"[**Git Hash**: {git_hash}]({repo_link}/commit/{git_hash})")},
 )
+
+with st.spinner("Loading ReDU metadata..."):
+    # create a session state variable to store the ReDU dataframe and check if loaded
+    if 'df_redu' not in st.session_state:
+        df_redu = load_redu_data()
+        st.session_state.df_redu = df_redu
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
 st.markdown("Edit entries in the sidebar to analyze fastMASST results with interactive visualizations")
@@ -229,7 +246,7 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
     else:
         cbar.set_label('Spectral matches', fontsize=10)
 
-    fig.ax_heatmap.xaxis.set_label_coords(0.5, -0.5)
+    fig.ax_heatmap.set(xlabel=None)
     heatmap_title = f"{variable}"
     fig.ax_heatmap.set_title(heatmap_title, fontsize=14, weight='bold')
 
@@ -238,22 +255,6 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
     fig.ax_heatmap.axvline(x=0, color='black', linewidth=1.5)
 
     return fig
-
-# Cache the ReDU dataframe loading
-@st.cache_data
-def load_redu_data():
-    """Load ReDU metadata file and return as DataFrame"""
-    try:
-        df_redu = pd.read_csv('REDU_metadata.tsv', sep='\t')
-        # Process ReDU table
-        df_redu['filename_2'] = df_redu['filename'].str.split('/').str[-1]
-        df_redu['filename_2'] = df_redu['filename_2'].str.replace('.mzML', '').str.replace('.mzXML', '')
-        df_redu['filepath'] = df_redu['ATTRIBUTE_DatasetAccession'].astype(str) + '/' + df_redu['filename_2'].astype(str)
-        return df_redu
-    except Exception as e:
-        st.error(f"Error loading ReDU metadata: {str(e)}")
-        return None
-
 
 
 # Sidebar for inputs
@@ -314,11 +315,6 @@ with st.sidebar:
         - [Fast Search Page](https://fasst.gnps2.org/fastsearch/)
         """)
 
-# Download ReDU metadata if not exists
-if not os.path.exists('REDU_metadata.tsv'):
-    from download_redu import download_redu_metadata
-    with st.spinner("Downloading ReDU metadata file... this may take a while!"):
-        download_redu_metadata('REDU_metadata.tsv')
 
 if st.session_state.get('run_masst_query', False):
     if 0 < len(query_df) <= 20:
@@ -335,8 +331,7 @@ if st.session_state.get('run_masst_query', False):
         st.error("Please add at least one USI to query", icon="⚠️")
 
 if "results" in st.session_state and len(st.session_state.results) > 0:
-    # Load ReDU data once and cache it
-    df_redu = load_redu_data()
+    df_redu = st.session_state.df_redu
     if df_redu is None:
         st.error("Failed to load ReDU metadata file")
         st.stop()
