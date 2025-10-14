@@ -1,2 +1,4 @@
 /backup/
 /example_data/REDU_metadata_nat_prot.tsv
+*.pyc
+REDU_metadata.tsv
