@@ -45,7 +45,7 @@ repo_link = "https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics"
 
 # Add a tracking token
 html('<script async defer data-website-id="74bc9983-13c4-4da0-89ae-b78209c13aaf" src="https://analytics.gnps2.org/umami.js"></script>', width=0, height=0)
-html('<script async defer data-website-id="<your_website_id>" src="https://analytics.gnps2.org/umami.js"></script>', width=0, height=0)
+html('<script defer src="https://analytics-api.gnps2.org/script.js" data-website-id="74665d88-3b9d-4812-b8fc-7f55ceb08f11"></script>', width=0, height=0)
 
 
 st.set_page_config(
