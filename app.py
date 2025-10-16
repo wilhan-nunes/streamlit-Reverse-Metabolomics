@@ -237,7 +237,9 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
     fig.ax_heatmap.set_xticklabels(fig.ax_heatmap.get_xticklabels(), rotation=90)
 
     cax = fig.ax_cbar
-    cax.set_position((.8, 0.3, .05, .3))
+    # Position colorbar to align with right edge of heatmap, avoiding overlap
+    heatmap_pos = fig.ax_heatmap.get_position()
+    cax.set_position([heatmap_pos.x1 + 0.04, heatmap_pos.y0 + 0.2, 0.06, heatmap_pos.height * 0.5])
     cbar = fig.ax_heatmap.collections[0].colorbar
 
     if log_scale:
