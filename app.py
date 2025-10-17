@@ -214,7 +214,7 @@ def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_
 
 
 def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
-                   col_cluster=False, row_cluster=False, width=2, height=8, ):
+                   col_cluster=False, row_cluster=False, width=2, height=8, custom_sizing=False):
     """Create heatmap visualization."""
     columns_for_heatmap = pivot_table.columns[1:]
 
@@ -229,12 +229,30 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
         linewidths=0.005,
         linecolor='white',
         cbar_kws={'orientation': 'vertical'},
-        figsize=(width, height)
+        figsize=(width, height) if custom_sizing else None
     )
 
     fig.ax_heatmap.yaxis.set_ticks_position('left')
     fig.ax_heatmap.yaxis.set_label_position('left')
     fig.ax_heatmap.set_xticklabels(fig.ax_heatmap.get_xticklabels(), rotation=90)
+    fig.ax_heatmap.set_yticklabels(fig.ax_heatmap.get_yticklabels(), rotation=0)
+
+    heatmap_title = f"{variable}"
+
+    if col_cluster:
+        dendrogram_height = fig.ax_col_dendrogram.get_position().height
+        fig.ax_heatmap.set_title(heatmap_title, pad=dendrogram_height * fig.figure.get_dpi() * 5, fontsize=14, weight='bold')
+    else:
+        fig.ax_heatmap.set_title(heatmap_title, pad=10, fontsize=14, weight='bold')
+
+    if row_cluster:
+        dendrogram_width = fig.ax_row_dendrogram.get_position().width
+        pad_value = int(dendrogram_width * fig.figure.get_dpi() * 4)  # Convert to points
+        print(pad_value)
+    else:  
+        pad_value = 10  
+
+    fig.ax_heatmap.tick_params(axis='y', pad=pad_value)
 
     cax = fig.ax_cbar
     # Position colorbar to align with right edge of heatmap, avoiding overlap
@@ -250,8 +268,6 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
         cbar.set_label('Spectral matches', fontsize=10)
 
     fig.ax_heatmap.set(xlabel=None)
-    heatmap_title = f"{variable}"
-    fig.ax_heatmap.set_title(heatmap_title, fontsize=14, weight='bold')
 
     line_count = len(pivot_table[variable].unique())
     fig.ax_heatmap.axhline(y=line_count, color='black', linewidth=1.5)
@@ -291,13 +307,20 @@ def create_heatmap_section(df_filtered, df_redu_filtered, analysis_column):
         )
 
     col1, col2 = st.columns(2)
-
     with col1:
         col_cluster = st.checkbox("Cluster columns", value=False)
-        heatmap_width = st.number_input("Heatmap width", min_value=2, max_value=10, value=4)
     with col2:
         row_cluster = st.checkbox("Cluster rows", value=False)
-        heatmap_height = st.number_input("Heatmap height", min_value=4, max_value=15, value=4)
+
+    col_checkbox, col1, col2 = st.columns([1,1,1])
+    with col_checkbox:
+        # add space
+        st.write("Custom heatmap size")
+        custommize_size = st.toggle("Enable", value=False, key='heatmap_size_customize'),
+    with col1:
+        heatmap_width = st.number_input("Heatmap width", min_value=2, max_value=10, value=4, disabled=not custommize_size)
+    with col2:
+        heatmap_height = st.number_input("Heatmap height", min_value=4, max_value=15, value=4, disabled=not custommize_size )
 
     if len(df_filtered) > 0:
         with st.spinner("Generating heatmap..."):
@@ -345,7 +368,8 @@ def create_heatmap_section(df_filtered, df_redu_filtered, analysis_column):
                     col_cluster=col_cluster,
                     row_cluster=row_cluster,
                     width=heatmap_width,
-                    height=heatmap_height
+                    height=heatmap_height,
+                    custom_sizing=st.session_state.get('heatmap_size_customize', False)
                 )
                 with st.container(border=True):
                     _, fig_col, _ = st.columns([1, 3, 1])
@@ -539,7 +563,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
         col1, col2 = st.columns([1, 2])
 
         with col1:
-            st.header("📋 Summary Statistics")
+            st.header("📋 Summary")
 
             # Counts table
             if analysis_column:
