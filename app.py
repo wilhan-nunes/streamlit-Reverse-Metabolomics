@@ -214,7 +214,7 @@ def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_
 
 
 def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
-                   col_cluster=False, row_cluster=False, width=2, height=8, ):
+                   col_cluster=False, row_cluster=False, width=2, height=8, custom_sizing=False):
     """Create heatmap visualization."""
     columns_for_heatmap = pivot_table.columns[1:]
 
@@ -229,15 +229,35 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
         linewidths=0.005,
         linecolor='white',
         cbar_kws={'orientation': 'vertical'},
-        figsize=(width, height)
+        figsize=(width, height) if custom_sizing else None
     )
 
     fig.ax_heatmap.yaxis.set_ticks_position('left')
     fig.ax_heatmap.yaxis.set_label_position('left')
     fig.ax_heatmap.set_xticklabels(fig.ax_heatmap.get_xticklabels(), rotation=90)
+    fig.ax_heatmap.set_yticklabels(fig.ax_heatmap.get_yticklabels(), rotation=0)
+
+    heatmap_title = f"{variable}"
+
+    if col_cluster:
+        dendrogram_height = fig.ax_col_dendrogram.get_position().height
+        fig.ax_heatmap.set_title(heatmap_title, pad=dendrogram_height * fig.figure.get_dpi() * 5, fontsize=14, weight='bold')
+    else:
+        fig.ax_heatmap.set_title(heatmap_title, pad=10, fontsize=14, weight='bold')
+
+    if row_cluster:
+        dendrogram_width = fig.ax_row_dendrogram.get_position().width
+        pad_value = int(dendrogram_width * fig.figure.get_dpi() * 4)  # Convert to points
+        print(pad_value)
+    else:  
+        pad_value = 10  
+
+    fig.ax_heatmap.tick_params(axis='y', pad=pad_value)
 
     cax = fig.ax_cbar
-    cax.set_position((.8, 0.3, .05, .3))
+    # Position colorbar to align with right edge of heatmap, avoiding overlap
+    heatmap_pos = fig.ax_heatmap.get_position()
+    cax.set_position([heatmap_pos.x1 + 0.04, heatmap_pos.y0 + 0.2, 0.06, heatmap_pos.height * 0.5])
     cbar = fig.ax_heatmap.collections[0].colorbar
 
     if log_scale:
@@ -248,14 +268,147 @@ def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=Fal
         cbar.set_label('Spectral matches', fontsize=10)
 
     fig.ax_heatmap.set(xlabel=None)
-    heatmap_title = f"{variable}"
-    fig.ax_heatmap.set_title(heatmap_title, fontsize=14, weight='bold')
 
     line_count = len(pivot_table[variable].unique())
     fig.ax_heatmap.axhline(y=line_count, color='black', linewidth=1.5)
     fig.ax_heatmap.axvline(x=0, color='black', linewidth=1.5)
 
     return fig
+
+@st.fragment
+def create_heatmap_section(df_filtered, df_redu_filtered, analysis_column):
+    """Generate heatmap visualization section with options and controls"""
+    st.header("🔥 Heatmap Visualizations")
+
+    # Heatmap options
+    col1, col2 = st.columns(2)
+    with col1:
+        heatmap_type = st.selectbox(
+            "Heatmap type:",
+            options=['Raw counts', 'Log-transformed counts', 'ReDU-normalized counts'],
+            help="Choose the type of heatmap to generate"
+        )
+
+    clustering_metrics = {
+        "Bray-Curtis": "braycurtis",
+        "Canberra": "canberra",
+        "Correlation": "correlation",
+        "Cosine": "cosine",
+        "Euclidean": "euclidean",
+        "Jaccard": "jaccard"
+    }
+
+    with col2:
+        metric = st.selectbox(
+            "Clustering metric:",
+            options=list(clustering_metrics.keys()),
+            help='The distance metric to use. See scipy.spatial.distance.pdist documentation for all available metrics.',
+            accept_new_options=True,
+        )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        col_cluster = st.checkbox("Cluster columns", value=False)
+    with col2:
+        row_cluster = st.checkbox("Cluster rows", value=False)
+
+    col_checkbox, col1, col2 = st.columns([1,1,1])
+    with col_checkbox:
+        # add space
+        st.write("Custom heatmap size")
+        custommize_size = st.toggle("Enable", value=False, key='heatmap_size_customize'),
+    with col1:
+        heatmap_width = st.number_input("Heatmap width", min_value=2, max_value=10, value=4, disabled=not custommize_size)
+    with col2:
+        heatmap_height = st.number_input("Heatmap height", min_value=4, max_value=15, value=4, disabled=not custommize_size )
+
+    if len(df_filtered) > 0:
+        with st.spinner("Generating heatmap..."):
+            try:
+                log_transform = heatmap_type == 'Log-transformed counts'
+                normalize_redu = heatmap_type == 'ReDU-normalized counts'
+
+                df_redu_counts = None
+                redu_count_col = None
+
+                if normalize_redu:
+                    df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
+                    df_redu_counts.columns = [analysis_column, f'{analysis_column}_counts']
+                    redu_count_col = f'{analysis_column}_counts'
+
+                if variable_to_exclude:
+                    drop_mask = df_filtered[analysis_column].isin(variable_to_exclude)
+                    indices_to_drop = df_filtered[drop_mask].index
+                    df_filtered = df_filtered.drop(indices_to_drop)
+
+                pivot_table = prepare_pivot_table(
+                    df_filtered,
+                    analysis_column,
+                    'Compound',
+                    log_transform=log_transform,
+                    normalize_redu=normalize_redu,
+                    df_redu_counts=df_redu_counts,
+                    redu_count_col=redu_count_col
+                )
+
+                if metric in clustering_metrics.keys():
+                    metric = clustering_metrics[metric]
+                elif metric in ssd._METRICS.keys():
+                    metric = metric
+                else:
+                    metric = 'euclidean'
+                    st.toast('Clustering metric not recognized, using default: euclidean', icon="⚠️")
+
+                fig = create_heatmap(
+                    pivot_table,
+                    analysis_column,
+                    metric=metric,
+                    log_scale=log_transform,
+                    normalize=normalize_redu,
+                    col_cluster=col_cluster,
+                    row_cluster=row_cluster,
+                    width=heatmap_width,
+                    height=heatmap_height,
+                    custom_sizing=st.session_state.get('heatmap_size_customize', False)
+                )
+                with st.container(border=True):
+                    _, fig_col, _ = st.columns([1, 3, 1])
+                    with fig_col:
+                        st.pyplot(fig.figure)
+
+                # Download options
+                col_a, col_b = st.columns(2)
+
+                with col_a:
+                    # Download pivot table
+                    csv_pivot = pivot_table.to_csv(index=False)
+                    st.download_button(
+                        label="Download pivot table",
+                        data=csv_pivot,
+                        file_name=f"pivot_table_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.csv",
+                        mime="text/csv",
+                        icon=":material/download:"
+                    )
+
+                with col_b:
+                    # Download plot as PNG
+                    img_buffer = io.BytesIO()
+                    fig.figure.savefig(img_buffer, format='svg', bbox_inches='tight')
+                    img_buffer.seek(0)
+
+                    st.download_button(
+                        label="Download heatmap (SVG)",
+                        data=img_buffer.getvalue(),
+                        file_name=f"heatmap_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.svg",
+                        mime="image/svg+xml",
+                        icon=":material/download:",
+                    )
+
+            except Exception as e:
+                st.error(f"Error generating heatmap: {str(e)}")
+    else:
+        st.info("No data available to generate heatmap with current filters.", icon="ℹ️")
+
 
 
 # Sidebar for inputs
@@ -410,7 +563,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
         col1, col2 = st.columns([1, 2])
 
         with col1:
-            st.header("📋 Summary Statistics")
+            st.header("📋 Summary")
 
             # Counts table
             if analysis_column:
@@ -428,127 +581,9 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                     disabled= not len(counts_table) > 0,
                 )
 
+
         with col2:
-            st.header("🔥 Heatmap Visualizations")
-
-            # Heatmap options
-            col1, col2 = st.columns(2)
-            with col1:
-                heatmap_type = st.selectbox(
-                    "Heatmap type:",
-                    options=['Raw counts', 'Log-transformed counts', 'ReDU-normalized counts'],
-                    help="Choose the type of heatmap to generate"
-                )
-
-            clustering_metrics = {
-                "Bray-Curtis": "braycurtis",
-                "Canberra": "canberra",
-                "Correlation": "correlation",
-                "Cosine": "cosine",
-                "Euclidean": "euclidean",
-                "Jaccard": "jaccard"
-            }
-
-            with col2:
-                metric = st.selectbox(
-                    "Clustering metric:",
-                    options=list(clustering_metrics.keys()),
-                    help='The distance metric to use. See scipy.spatial.distance.pdist documentation for all available metrics.',
-                    accept_new_options=True,
-                )
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                col_cluster = st.checkbox("Cluster columns", value=False)
-                heatmap_width = st.number_input("Heatmap width", min_value=2, max_value=10, value=4)
-            with col2:
-                row_cluster = st.checkbox("Cluster rows", value=False)
-                heatmap_height = st.number_input("Heatmap height", min_value=4, max_value=15, value=4)
-
-            if st.button("🎨 Generate Heatmap", disabled= not len(df_filtered) > 0):
-                with st.spinner("Generating heatmap..."):
-                    try:
-                        log_transform = heatmap_type == 'Log-transformed counts'
-                        normalize_redu = heatmap_type == 'ReDU-normalized counts'
-
-                        df_redu_counts = None
-                        redu_count_col = None
-
-                        if normalize_redu:
-                            df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
-                            df_redu_counts.columns = [analysis_column, f'{analysis_column}_counts']
-                            redu_count_col = f'{analysis_column}_counts'
-
-                        if variable_to_exclude:
-                            drop_mask = df_filtered[analysis_column].isin(variable_to_exclude)
-                            indices_to_drop = df_filtered[drop_mask].index
-                            df_filtered = df_filtered.drop(indices_to_drop)
-
-                        pivot_table = prepare_pivot_table(
-                            df_filtered,
-                            analysis_column,
-                            'Compound',
-                            log_transform=log_transform,
-                            normalize_redu=normalize_redu,
-                            df_redu_counts=df_redu_counts,
-                            redu_count_col=redu_count_col
-                        )
-
-                        if metric in clustering_metrics.keys():
-                            metric = clustering_metrics[metric]
-                        elif metric in ssd._METRICS.keys():
-                            metric = metric
-                        else:
-                            metric = 'euclidean'
-                            st.toast('Clustering metric not recognized, using default: euclidean', icon="⚠️")
-
-                        fig = create_heatmap(
-                            pivot_table,
-                            analysis_column,
-                            metric=metric,
-                            log_scale=log_transform,
-                            normalize=normalize_redu,
-                            col_cluster=col_cluster,
-                            row_cluster=row_cluster,
-                            width=heatmap_width,
-                            height=heatmap_height
-                        )
-                        with st.container(border=True):
-                            _, fig_col, _ = st.columns([1, 3, 1])
-                            with fig_col:
-                                st.pyplot(fig.figure)
-
-                        # Download options
-                        col_a, col_b = st.columns(2)
-
-                        with col_a:
-                            # Download pivot table
-                            csv_pivot = pivot_table.to_csv(index=False)
-                            st.download_button(
-                                label="Download pivot table",
-                                data=csv_pivot,
-                                file_name=f"pivot_table_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.csv",
-                                mime="text/csv",
-                                icon=":material/download:"
-                            )
-
-                        with col_b:
-                            # Download plot as PNG
-                            img_buffer = io.BytesIO()
-                            fig.figure.savefig(img_buffer, format='svg', bbox_inches='tight')
-                            img_buffer.seek(0)
-
-                            st.download_button(
-                                label="Download heatmap (SVG)",
-                                data=img_buffer.getvalue(),
-                                file_name=f"heatmap_{analysis_column}_{heatmap_type.replace(' ', '_').lower()}.svg",
-                                mime="image/svg+xml",
-                                icon=":material/download:",
-                            )
-
-                    except Exception as e:
-                        st.error(f"Error generating heatmap: {str(e)}")
+            create_heatmap_section(df_filtered, df_redu_filtered, analysis_column)
 
         # Data preview
         st.header(":mag: Data Preview")
