@@ -39,7 +39,7 @@ mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype'] = 42
 
 # TODO: Bump version
-app_version = "2025-08-15"
+app_version = "2025-08-22"
 git_hash = get_git_short_rev()
 repo_link = "https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics"
 
