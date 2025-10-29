@@ -9,7 +9,7 @@ import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
 from streamlit.components.v1 import html
-
+from dotenv import load_dotenv
 from welcome import welcome_page
 from download_redu import load_redu
 
@@ -23,7 +23,7 @@ def get_git_short_rev():
     except Exception:
         return ".git/ not found"
 
-@st.cache_data(ttl=3600) # this will allow the user to have a 1 hour window to explore the app before the Redu metadata is reloaded
+@st.cache_data#(ttl=3600) # this will allow the user to have a 1 hour window to explore the app before the Redu metadata is reloaded
 def load_redu_data():
     """Load ReDU metadata file and return as DataFrame"""
     try:
@@ -32,7 +32,6 @@ def load_redu_data():
     except Exception as e:
         st.error(f"Error loading ReDU metadata: {str(e)}")
         return None
-
 
 # Configure matplotlib for PDF output
 mpl.rcParams['pdf.fonttype'] = 42
@@ -57,11 +56,38 @@ st.set_page_config(
                           f"[**Git Hash**: {git_hash}]({repo_link}/commit/{git_hash})")},
 )
 
-with st.spinner("Loading ReDU metadata..."):
-    # create a session state variable to store the ReDU dataframe and check if loaded
-    if 'df_redu' not in st.session_state:
-        df_redu = load_redu_data()
-        st.session_state.df_redu = df_redu
+# Check query parameters for force reload
+load_dotenv('.env')
+REDU_RELOAD_PASSWORD = os.getenv("REDU_RELOAD_PASSWORD", "")
+query_params = st.query_params
+
+if query_params.get('renew_redu', ''):
+    # Prompt for password
+    password = st.text_input("Enter password to force reload ReDU metadata:", type="password", width=250)
+
+    if password and password == REDU_RELOAD_PASSWORD:
+        st.info("🔄 Force reloading ReDU metadata...")
+        # Clear the file and cache
+        redu_file_path = 'REDU_metadata.tsv'
+        if os.path.exists(redu_file_path):
+            os.remove(redu_file_path)
+            print(f"Removed {redu_file_path}")
+            # Clear the cache for this function
+            load_redu_data.clear()
+            st.session_state.clear()
+            # Remove the query parameter to prevent re-triggering on refresh
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.error("Incorrect password")
+            st.stop()
+
+# Load ReDU data into session state for persistence
+if 'df_redu' not in st.session_state:
+    with st.spinner("Loading ReDU metadata..."):
+        st.session_state.df_redu = load_redu_data()
+
+df_redu = st.session_state.df_redu
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
 st.markdown("Edit entries in the sidebar to analyze fastMASST results with interactive visualizations")
@@ -485,7 +511,7 @@ if st.session_state.get('run_masst_query', False):
         st.error("Please add at least one USI to query", icon="⚠️")
 
 if "results" in st.session_state and len(st.session_state.results) > 0:
-    df_redu = st.session_state.df_redu
+    # Use df_redu from session state
     if df_redu is None:
         st.error("Failed to load ReDU metadata file")
         st.stop()
@@ -495,6 +521,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
     try:
         if use_example:
             st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
+            st.session_state.df_merged = pd.read_csv('example_data/df_merged_example.csv')
         else:
             masst_query_params = st.session_state.masst_query_params
             mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)
@@ -523,6 +550,8 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                 )
         if "df_merged" not in st.session_state:
             df_merged = load_and_merge_data(results, usi_data, df_redu, mass_tolerance)
+            # save for example
+            # df_merged.to_csv('example_data/df_merged_example.csv', index=False)
             st.session_state.df_merged = df_merged
         else:
             df_merged = st.session_state.df_merged
