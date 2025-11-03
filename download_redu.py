@@ -112,7 +112,7 @@ def load_redu(max_age_days=30):
         download_redu_metadata(file_path)
     
     try:
-        df_redu = pd.read_csv(file_path, sep='\t')
+        df_redu = pd.read_csv(file_path, sep='\t', low_memory=False)
         # Process ReDU table
         df_redu['filename_2'] = df_redu['filename'].str.split('/').str[-1]
         df_redu['filename_2'] = df_redu['filename_2'].str.replace('.mzML', '').str.replace('.mzXML', '')
