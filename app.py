@@ -541,14 +541,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
     results = st.session_state.results
 
     try:
-        # if use_example:
-        #     st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
-        #     st.session_state.df_merged = pd.read_csv('example_data/df_merged_example.csv')
-        # else:
-        #     masst_query_params = st.session_state.masst_query_params
-        #     mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)
-
-               # Organism selection
+        # Organism selection
         col1, col2 = st.columns(2)
         with col1:
             st.write("🧬 Organism Filter")
