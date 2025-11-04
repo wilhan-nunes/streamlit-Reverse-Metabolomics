@@ -12,6 +12,10 @@ from streamlit.components.v1 import html
 from dotenv import load_dotenv
 from welcome import welcome_page
 from download_redu import load_redu
+import time
+
+from masst_sidebar import create_masst_sidebar, create_usi_input
+from masst_client import masst_query_all
 
 
 def get_git_short_rev():
@@ -93,15 +97,6 @@ st.title("🧬 Reverse Metabolomics Analysis Tool")
 st.markdown("Edit entries in the sidebar to analyze fastMASST results with interactive visualizations")
 
 
-def check_memory_usage():
-    """Check current memory usage and warn if high"""
-    import psutil
-    memory_percent = psutil.virtual_memory().percent
-    if memory_percent > 80:
-        st.warning(f"High memory usage detected: {memory_percent:.1f}%. Consider reducing dataset size.")
-    return memory_percent
-
-
 # Create custom colormap
 @st.cache_data
 def create_colormap():
@@ -110,8 +105,57 @@ def create_colormap():
     cmap_name = 'white_blue_red'
     return LinearSegmentedColormap.from_list(cmap_name, colors, N=n_bins)
 
-
 cmap_wbr = create_colormap()
+
+@st.cache_data
+def cached_masst_results(query_df, database, masst_type, analog, precursor_mz_tol, fragment_mz_tol, min_cos):
+    return masst_query_all(query_df, database, masst_type, analog, precursor_mz_tol, fragment_mz_tol, min_cos)
+
+
+def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
+                        tolerance: float):
+    """Load and create the merged dataframe with tolerance filtering"""
+
+    usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
+    compound_names = list(usis_table['compound_name'])
+
+    df_combined = fastmasst_results.copy()
+    # filter for tolerance
+    df_combined = df_combined[(df_combined['Delta Mass'] >= -tolerance) & (df_combined['Delta Mass'] <= tolerance)]
+    df_combined['Compound'] = df_combined['query_usi'].apply(lambda x: usi_to_name.get(x, 'Unknown'))
+
+    # Create filepath column
+    usi_parts = df_combined['USI'].str.rsplit('/', n=1).str[-1].str.split(':', n=1).str[0]
+    df_combined['filepath'] = df_combined['Dataset'] + "/" + usi_parts.str.replace(
+        r'\.mz(ML|XML)$', '', regex=True
+    )
+
+    # Merge datasets (df_redu is already processed)
+    df_merged = pd.merge(df_combined, df_redu, left_on='filepath', right_on='filepath', how='left',
+                         suffixes=('_fasst', '_redu'))
+
+    # Standardize body part names
+    if 'UBERONBodyPartName' in df_merged.columns:
+        body_part_replacements = {
+            'skin of trunk': 'skin',
+            'skin of pes': 'skin',
+            'head or neck skin': 'skin',
+            'axilla skin': 'skin',
+            'skin of manus': 'skin',
+            'arm skin': 'skin',
+            'blood plasma': 'blood',
+            'blood serum': 'blood'
+        }
+
+        df_merged['UBERONBodyPartName'] = df_merged['UBERONBodyPartName'].replace(body_part_replacements)
+
+    return df_merged
+
+
+@st.cache_data
+def cached_load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
+                               tolerance: float):
+    return load_and_merge_data(fastmasst_results, usis_table, df_redu, tolerance)
 
 
 # Helper functions
@@ -172,46 +216,6 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
 
     return pivot_table
 
-
-@st.cache_data
-def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
-                        tolerance: float):
-    """Load and create the merged dataframe with tolerance filtering"""
-
-    usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
-    compound_names = list(usis_table['compound_name'])
-
-    df_combined = fastmasst_results.copy()
-    # filter for tolerance
-    df_combined = df_combined[(df_combined['Delta Mass'] >= -tolerance) & (df_combined['Delta Mass'] <= tolerance)]
-    df_combined['Compound'] = df_combined['query_usi'].apply(lambda x: usi_to_name.get(x, 'Unknown'))
-
-    # Create filepath column
-    df_combined['filepath'] = df_combined['Dataset'] + "/" + df_combined['USI'].str.split('/').str[-1]
-    df_combined['filepath'] = df_combined['filepath'].str.split(':').str[0]
-    df_combined['filepath'] = df_combined['filepath'].str.replace('.mzML', '').str.replace('.mzXML', '')
-
-    # Merge datasets (df_redu is already processed)
-    df_merged = pd.merge(df_combined, df_redu, left_on='filepath', right_on='filepath', how='left',
-                         suffixes=('_fasst', '_redu'))
-
-    # Standardize body part names
-    if 'UBERONBodyPartName' in df_merged.columns:
-        body_part_replacements = {
-            'skin of trunk': 'skin',
-            'skin of pes': 'skin',
-            'head or neck skin': 'skin',
-            'axilla skin': 'skin',
-            'skin of manus': 'skin',
-            'arm skin': 'skin',
-            'blood plasma': 'blood',
-            'blood serum': 'blood'
-        }
-
-        for old, new in body_part_replacements.items():
-            df_merged['UBERONBodyPartName'] = df_merged['UBERONBodyPartName'].str.replace(old, new)
-
-    return df_merged
 
 
 def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_filter: str | list = "All organisms"):
@@ -442,23 +446,15 @@ with st.sidebar:
     st.header("📁 Data Input")
 
     # Example data option
-    use_example = st.checkbox("Load example data", value=False, help="Use built-in example files instead of uploading your own", key='use_example')
+    use_example = st.checkbox("Load example data", 
+                              value=False, 
+                              help="Use built-in example files instead of uploading your own", 
+                              key='use_example'
+                              )
 
-    if not use_example:
-        from masst_sidebar import create_masst_sidebar, create_usi_input
-        from masst_client import masst_query_all
-
-        usi_data = create_usi_input()
-        masst_query_params = create_masst_sidebar()
-        # Filter out empty rows
-        query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
-
-        st.session_state.masst_query_params = masst_query_params
-        st.session_state['run_masst_query'] = st.button("Run MASST Query", icon="🔎", type="primary", use_container_width=True)
-
-    else:
-        results = pd.read_csv('example_data/his-c4-phe-c4-phe-ca.csv')
-        usi_data = pd.DataFrame({
+    if use_example:
+        # Load the actual example USI data
+        data = pd.DataFrame({
             'usi': [
                 'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
                 'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601',
@@ -466,11 +462,32 @@ with st.sidebar:
             ],
             'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
         })
-        st.write(usi_data)
-        mass_tolerance = st.number_input("Delta mass tolerance (Da)", min_value=0.0, max_value=1.0,
-                                                 value=0.02, step=0.01)
-        if st.button('Run Example', icon="🧪", type="primary", use_container_width=True):
-            st.session_state.results = results
+
+    else:
+        data = None
+
+    usi_data = create_usi_input(disabled=use_example, usi_data=data)
+    masst_query_params = create_masst_sidebar(disabled=use_example)
+    # Filter out empty rows
+    query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
+
+    st.session_state.masst_query_params = masst_query_params
+    
+    # Change button label and behavior based on example mode
+    if use_example:
+        button_label = "Load Example Data"
+        button_icon = "🧪"
+    else:
+        button_label = "Run MASST Query"
+        button_icon = "🔎"
+    
+    st.session_state['run_masst_query'] = st.button(
+        button_label, 
+        icon=button_icon, 
+        type="primary", 
+        use_container_width=True,
+        disabled=use_example and 'results' in st.session_state  # Disable if example already loaded
+    )
 
     if st.button("Clear Cache", type="secondary", icon="🗑️",use_container_width=True):
         st.session_state.clear()
@@ -497,7 +514,12 @@ with st.sidebar:
 
 
 if st.session_state.get('run_masst_query', False):
-    if 0 < len(query_df) <= 20:
+    # Skip actual MASST query if using example data (already loaded)
+    if use_example:
+        results = cached_masst_results(query_df, **masst_query_params)
+        st.session_state.results = results
+        st.success(f"✅ Example data loaded with {len(query_df)} USIs")
+    elif 0 < len(query_df) <= 20:
         with st.spinner("Running MASST query..."):
             # Here you would call your imported masst_query_all function
             results = masst_query_all(query_df, **masst_query_params)
@@ -519,12 +541,12 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
     results = st.session_state.results
 
     try:
-        if use_example:
-            st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
-            st.session_state.df_merged = pd.read_csv('example_data/df_merged_example.csv')
-        else:
-            masst_query_params = st.session_state.masst_query_params
-            mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)
+        # if use_example:
+        #     st.success("Using example data filtered for Precursor delta mass tolerance of %.2f Da" % mass_tolerance)
+        #     st.session_state.df_merged = pd.read_csv('example_data/df_merged_example.csv')
+        # else:
+        #     masst_query_params = st.session_state.masst_query_params
+        #     mass_tolerance = masst_query_params.get('precursor_mz_tol', 0.02)
 
                # Organism selection
         col1, col2 = st.columns(2)
@@ -549,7 +571,18 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
                     key='manual_organism_choice',
                 )
         if "df_merged" not in st.session_state:
-            df_merged = load_and_merge_data(results, usi_data, df_redu, mass_tolerance)
+            start_time = time.time()
+            
+            # Use cached version for example data, uncached for real queries
+            if use_example:
+                df_merged = cached_load_and_merge_data(results, usi_data, df_redu, masst_query_params.get('precursor_mz_tol', 0.02))
+                st.success(f"✅ Example data merged using cached function")
+            else:
+                df_merged = load_and_merge_data(results, usi_data, df_redu, masst_query_params.get('precursor_mz_tol', 0.02))
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                st.success(f"✅ Data merged in {elapsed_time:.2f} seconds")
+            
             # save for example
             # df_merged.to_csv('example_data/df_merged_example.csv', index=False)
             st.session_state.df_merged = df_merged
