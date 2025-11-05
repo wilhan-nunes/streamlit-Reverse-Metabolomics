@@ -40,7 +40,7 @@ def get_database_options():
         return FALLBACK_OPTIONS
 
 
-def create_masst_sidebar():
+def create_masst_sidebar(disabled: bool = False) -> dict:
     """Create sidebar widgets for MASST parameters and return the values"""
 
     with st.sidebar:
@@ -52,7 +52,8 @@ def create_masst_sidebar():
                 "Database",
                 options=options_list,
                 index=options_list.index("metabolomicspanrepo_index_latest") if "metabolomicspanrepo_index_latest" in options_list else 0,
-                help="Type of database to search"
+                help="Type of database to search",
+                disabled=disabled
             )
 
             # # MASST type
@@ -68,7 +69,8 @@ def create_masst_sidebar():
                 "Analog Search",
                 options=["No", "Yes"],
                 index=0,
-                help="Perform analog search"
+                help="Perform analog search",
+                disabled=disabled
             )
 
             # Tolerance parameters
@@ -81,7 +83,8 @@ def create_masst_sidebar():
                 value=0.02,
                 step=0.001,
                 format="%.3f",
-                help="Precursor mass tolerance"
+                help="Precursor mass tolerance",
+                disabled=disabled
             )
 
             fragment_tolerance = st.number_input(
@@ -91,7 +94,8 @@ def create_masst_sidebar():
                 value=0.02,
                 step=0.001,
                 format="%.3f",
-                help="Fragment mass tolerance"
+                help="Fragment mass tolerance",
+                disabled=disabled
             )
 
             # Cosine threshold
@@ -101,7 +105,8 @@ def create_masst_sidebar():
                 max_value=1.0,
                 value=0.7,
                 step=0.01,
-                help="Minimum cosine similarity score"
+                help="Minimum cosine similarity score",
+                disabled=disabled
             )
 
         return {
@@ -114,14 +119,14 @@ def create_masst_sidebar():
         }
 
 
-def create_usi_input():
+def create_usi_input(disabled: bool = False, usi_data: pd.DataFrame = None) -> pd.DataFrame:
     """Create main area input for USI data"""
     with st.sidebar:
         st.subheader("USI Input Data", help='Enter one USI per line in the data editor below. You can add more rows as necessary.' )
 
         # Create sample data structure
-        if 'usi_data' not in st.session_state:
-            st.session_state.usi_data = pd.DataFrame({
+        if not isinstance(usi_data, pd.DataFrame):
+            usi_data = pd.DataFrame({
                 'usi': [
                     'USI-1',
                     'USI-2',
@@ -132,7 +137,8 @@ def create_usi_input():
 
         # Data editor
         edited_data = st.data_editor(
-            st.session_state.usi_data,
+            usi_data,
+            disabled=disabled,
             num_rows="dynamic",
             use_container_width=True,
             column_config={

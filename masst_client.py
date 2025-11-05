@@ -26,7 +26,8 @@ def masst_query_all(query_df, database, masst_type, analog=False, precursor_mz_t
             output_results_list.append(results_df)
         except:
             pass
-    
+    if len(output_results_list) == 0:
+        return pd.DataFrame()
     output_results_df = pd.concat(output_results_list)
 
     return output_results_df
