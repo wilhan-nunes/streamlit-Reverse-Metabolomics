@@ -482,6 +482,7 @@ with st.sidebar:
             "Select example dataset:",
             options=['Example Set 1', 'Example Set 2'],
             help="Choose which example dataset to load",
+            on_change=lambda: st.session_state.pop('results', None)
         )
         if selected_example == 'Example Set 1':
             data = pd.DataFrame(EXAMPLE_SET_1)
@@ -510,7 +511,7 @@ with st.sidebar:
         icon=button_icon, 
         type="primary", 
         use_container_width=True,
-        disabled=use_example and 'results' in st.session_state  # Disable if example already loaded
+        disabled='results' in st.session_state  # Disable if example already loaded
     )
 
     if st.button("Run new query", type="secondary", icon=":material/replay:",use_container_width=True):
