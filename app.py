@@ -1,4 +1,4 @@
-import os
+
 
 import streamlit as st
 import pandas as pd
@@ -27,15 +27,15 @@ def get_git_short_rev():
     except Exception:
         return ".git/ not found"
 
-@st.cache_data#(ttl=3600) # this will allow the user to have a 1 hour window to explore the app before the Redu metadata is reloaded
+@st.cache_data(ttl=2592000)  # Cache for 30 days
 def load_redu_data():
     """Load ReDU metadata file and return as DataFrame"""
     try:
-        df = load_redu(max_age_days=30) # if the file is older than 30 days it will be re-downloaded
-        return df
+        df, file_date = load_redu(max_age_days=30) # if the file is older than 30 days it will be re-downloaded
+        return df, file_date
     except Exception as e:
         st.error(f"Error loading ReDU metadata: {str(e)}")
-        return None
+        return None, None
 
 # Configure matplotlib for PDF output
 mpl.rcParams['pdf.fonttype'] = 42
@@ -82,36 +82,11 @@ st.set_page_config(
                           f"[**Git Hash**: {git_hash}]({repo_link}/commit/{git_hash})")},
 )
 
-# Check query parameters for force reload
-load_dotenv('.env')
-REDU_RELOAD_PASSWORD = os.getenv("REDU_RELOAD_PASSWORD", "")
-query_params = st.query_params
-
-if query_params.get('renew_redu', ''):
-    # Prompt for password
-    password = st.text_input("Enter password to force reload ReDU metadata:", type="password", width=250)
-
-    if password and password == REDU_RELOAD_PASSWORD:
-        st.info("🔄 Force reloading ReDU metadata...")
-        # Clear the file and cache
-        redu_file_path = 'REDU_metadata.tsv'
-        if os.path.exists(redu_file_path):
-            os.remove(redu_file_path)
-            print(f"Removed {redu_file_path}")
-            # Clear the cache for this function
-            load_redu_data.clear()
-            st.session_state.clear()
-            # Remove the query parameter to prevent re-triggering on refresh
-            st.query_params.clear()
-            st.rerun()
-        else:
-            st.error("Incorrect password")
-            st.stop()
 
 # Load ReDU data into session state for persistence
 if 'df_redu' not in st.session_state:
     with st.spinner("Loading ReDU metadata..."):
-        st.session_state.df_redu = load_redu_data()
+        st.session_state.df_redu, st.session_state.file_date = load_redu_data()
 
 df_redu = st.session_state.df_redu
 
@@ -518,6 +493,8 @@ with st.sidebar:
         st.session_state.clear()
         st.session_state["use_example"] = False
         st.rerun()
+        
+    st.markdown(f"**ReDU metadata last updated:** {st.session_state.file_date}")
 
     st.subheader("Contributors")
     st.markdown(
