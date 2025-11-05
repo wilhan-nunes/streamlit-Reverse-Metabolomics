@@ -51,6 +51,28 @@ html('<script async defer data-website-id="74bc9983-13c4-4da0-89ae-b78209c13aaf"
 html('<script defer src="https://analytics-api.gnps2.org/script.js" data-website-id="74665d88-3b9d-4812-b8fc-7f55ceb08f11"></script>', width=0, height=0)
 
 
+# Original paper example - https://doi.org/10.1038/s41596-024-01136-2
+EXAMPLE_SET_1 = {
+                'usi': [
+                    'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
+                    'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601',
+                    'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00011434738'
+                ],
+                'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
+            }
+
+# HIV related examples
+EXAMPLE_SET_2 = {
+                'usi': [
+                    'mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:341',
+                    'mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:1984',
+                    'mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:9826',
+                    'mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:839'
+                ],
+                'compound_name': ['Histamine-C2:0', 'N-acetylcadaverine-C2:0', 'Candidate-1', 'Candidate-2']
+            }
+
+
 st.set_page_config(
     page_title="Reverse Metabolomics Analysis",
     page_icon="🧬",
@@ -94,7 +116,6 @@ if 'df_redu' not in st.session_state:
 df_redu = st.session_state.df_redu
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
-st.markdown("Edit entries in the sidebar to analyze fastMASST results with interactive visualizations")
 
 
 # Create custom colormap
@@ -115,6 +136,10 @@ def cached_masst_results(query_df, database, masst_type, analog, precursor_mz_to
 def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
                         tolerance: float):
     """Load and create the merged dataframe with tolerance filtering"""
+
+    # Early exit if no data
+    if len(fastmasst_results) == 0:
+        return pd.DataFrame()
 
     usi_to_name = dict(zip(usis_table['usi'], usis_table['compound_name']))
     compound_names = list(usis_table['compound_name'])
@@ -153,7 +178,7 @@ def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFram
 
 
 @st.cache_data
-def cached_load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
+def load_and_merge_data_wrapper(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
                                tolerance: float):
     return load_and_merge_data(fastmasst_results, usis_table, df_redu, tolerance)
 
@@ -453,21 +478,20 @@ with st.sidebar:
                               )
 
     if use_example:
-        # Load the actual example USI data
-        data = pd.DataFrame({
-            'usi': [
-                'mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001',
-                'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601',
-                'mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00011434738'
-            ],
-            'compound_name': ['Phe-CA', 'Phe-C4:0', 'His-C4:0']
-        })
-
+        selected_example = st.selectbox(
+            "Select example dataset:",
+            options=['Example Set 1', 'Example Set 2'],
+            help="Choose which example dataset to load",
+        )
+        if selected_example == 'Example Set 1':
+            data = pd.DataFrame(EXAMPLE_SET_1)
+        elif selected_example == 'Example Set 2':
+            data = pd.DataFrame(EXAMPLE_SET_2)
     else:
         data = None
 
-    usi_data = create_usi_input(disabled=use_example, usi_data=data)
-    masst_query_params = create_masst_sidebar(disabled=use_example)
+    usi_data = create_usi_input(usi_data=data)
+    masst_query_params = create_masst_sidebar()
     # Filter out empty rows
     query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
@@ -489,7 +513,7 @@ with st.sidebar:
         disabled=use_example and 'results' in st.session_state  # Disable if example already loaded
     )
 
-    if st.button("Clear Cache", type="secondary", icon="🗑️",use_container_width=True):
+    if st.button("Run new query", type="secondary", icon=":material/replay:",use_container_width=True):
         st.session_state.clear()
         st.session_state["use_example"] = False
         st.rerun()
@@ -518,7 +542,7 @@ if st.session_state.get('run_masst_query', False):
     if use_example:
         results = cached_masst_results(query_df, **masst_query_params)
         st.session_state.results = results
-        st.success(f"✅ Example data loaded with {len(query_df)} USIs")
+
     elif 0 < len(query_df) <= 20:
         with st.spinner("Running MASST query..."):
             # Here you would call your imported masst_query_all function
@@ -541,6 +565,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
     results = st.session_state.results
 
     try:
+        st.markdown("----")
         # Organism selection
         col1, col2 = st.columns(2)
         with col1:
@@ -568,8 +593,7 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
             
             # Use cached version for example data, uncached for real queries
             if use_example:
-                df_merged = cached_load_and_merge_data(results, usi_data, df_redu, masst_query_params.get('precursor_mz_tol', 0.02))
-                st.success(f"✅ Example data merged using cached function")
+                df_merged = load_and_merge_data_wrapper(results, usi_data, df_redu, masst_query_params.get('precursor_mz_tol', 0.02))
             else:
                 df_merged = load_and_merge_data(results, usi_data, df_redu, masst_query_params.get('precursor_mz_tol', 0.02))
                 end_time = time.time()
