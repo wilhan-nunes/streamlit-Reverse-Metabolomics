@@ -6,6 +6,7 @@ import time
 import logging
 import os
 import pandas as pd
+from datetime import datetime
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -17,14 +18,18 @@ logging.basicConfig(
 
 def download_redu_metadata(output_path):
     """
-    Download ReDU metadata file from GNPS2 using streaming.
-    Downloads to a temporary file first, then moves to final location on completion.
+    Download ReDU metadata file from GNPS2 using streaming and save as parquet.
+    Downloads to a temporary file first, then converts to parquet and moves to final location.
 
     Args:
-        output_path: Path where to save the downloaded file
+        output_path: Path where to save the downloaded parquet file
     """
     url = "https://redu.gnps2.org/dump"
     output_path = Path(output_path)
+    
+    # Ensure output has .parquet extension
+    if output_path.suffix != '.parquet':
+        output_path = output_path.with_suffix('.parquet')
 
     # Create directory if it doesn't exist
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,8 +71,14 @@ def download_redu_metadata(output_path):
                             print(f"\rDownloading: {progress:.1f}% ({speed:.1f} MB/s)", end="")
                     print()  # New line after download completes
 
-        # Move temporary file to final location only after successful download
-        shutil.move(temp_path, output_path)
+        # Read TSV and convert to parquet
+        print("Converting to parquet format...")
+        df = pd.read_csv(temp_path, sep='\t', low_memory=False)
+        df.to_parquet(output_path, index=False)
+        
+        # Clean up temporary TSV file
+        temp_path.unlink()
+        
         print(f"Download completed successfully: {output_path}")
         return True
 
@@ -94,9 +105,11 @@ def load_redu(max_age_days=30):
         max_age_days (int): Maximum age in days before re-downloading the file.
 
     Returns:
-        pd.DataFrame: Processed ReDU metadata DataFrame, or None if loading fails.
+        tuple: (pd.DataFrame, datetime) - Processed ReDU metadata DataFrame and file modification datetime, 
+               or (None, None) if loading fails.
     """
-    file_path = 'REDU_metadata.tsv'
+    
+    file_path = 'REDU_metadata.parquet'
     
     if os.path.exists(file_path):
         # Get modification time (ctime on Linux is mtime)
@@ -107,17 +120,21 @@ def load_redu(max_age_days=30):
         if age_days > max_age_days:
             print(f"File is {age_days:.1f} days old, re-downloading...")
             download_redu_metadata(file_path)
+            mtime = os.path.getmtime(file_path)
     else:
         print("File does not exist, downloading...")
         download_redu_metadata(file_path)
+        mtime = os.path.getmtime(file_path)
+    
+    file_date = datetime.fromtimestamp(mtime)
     
     try:
-        df_redu = pd.read_csv(file_path, sep='\t', low_memory=False)
+        df_redu = pd.read_parquet(file_path)
         # Process ReDU table
         df_redu['filename_2'] = df_redu['filename'].str.split('/').str[-1]
         df_redu['filename_2'] = df_redu['filename_2'].str.replace('.mzML', '').str.replace('.mzXML', '')
         df_redu['filepath'] = df_redu['ATTRIBUTE_DatasetAccession'].astype(str) + '/' + df_redu['filename_2'].astype(str)
-        return df_redu
+        return df_redu, file_date
     except Exception as e:
         print(f"Error loading ReDU metadata: {str(e)}")
-        return None
+        return None, None
