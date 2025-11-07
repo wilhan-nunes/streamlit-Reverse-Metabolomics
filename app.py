@@ -83,12 +83,9 @@ st.set_page_config(
 )
 
 
-# Load ReDU data into session state for persistence
-if 'df_redu' not in st.session_state:
-    with st.spinner("Loading ReDU metadata..."):
-        st.session_state.df_redu, st.session_state.file_date = load_redu_data()
-
-df_redu = st.session_state.df_redu
+# Load ReDU data directly from cache (shared across all users)
+with st.spinner("Loading ReDU metadata..."):
+    df_redu, file_date = load_redu_data()
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
 
@@ -494,7 +491,7 @@ with st.sidebar:
         st.session_state["use_example"] = False
         st.rerun()
         
-    st.markdown(f"**ReDU metadata last updated:** {st.session_state.file_date}")
+    st.markdown(f"**ReDU metadata last updated:** {file_date}")
 
     st.subheader("Contributors")
     st.markdown(
