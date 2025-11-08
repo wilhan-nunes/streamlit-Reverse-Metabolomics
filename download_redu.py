@@ -96,18 +96,31 @@ def download_redu_metadata(output_path):
         return False
 
 
-def load_redu(max_age_days=30):
+def load_redu(max_age_days=30, columns_to_load=None):
     """
     Load ReDU metadata file, checking if it exists and how old it is.
     Downloads the file if it doesn't exist or is older than max_age_days.
 
     Args:
         max_age_days (int): Maximum age in days before re-downloading the file.
+        columns_to_load (list, optional): List of columns to load. If None, loads only essential columns.
 
     Returns:
         tuple: (pd.DataFrame, datetime) - Processed ReDU metadata DataFrame and file modification datetime, 
                or (None, None) if loading fails.
     """
+    
+    # Define essential columns used by the application
+    if columns_to_load is None:
+        columns_to_load = [
+            'filename',
+            'ATTRIBUTE_DatasetAccession',
+            'NCBITaxonomy',
+            'UBERONBodyPartName',
+            'DOIDCommonName',
+            'BiologicalSex',
+            'AgeInYears'
+        ]
     
     file_path = 'REDU_metadata.parquet'
     
@@ -129,11 +142,20 @@ def load_redu(max_age_days=30):
     file_date = datetime.fromtimestamp(mtime)
     
     try:
-        df_redu = pd.read_parquet(file_path)
+        # Load only specified columns for memory efficiency
+        df_redu = pd.read_parquet(file_path, columns=columns_to_load)
+        
         # Process ReDU table
         df_redu['filename_2'] = df_redu['filename'].str.split('/').str[-1]
         df_redu['filename_2'] = df_redu['filename_2'].str.replace('.mzML', '').str.replace('.mzXML', '')
         df_redu['filepath'] = df_redu['ATTRIBUTE_DatasetAccession'].astype(str) + '/' + df_redu['filename_2'].astype(str)
+        
+        # Drop the temporary filename_2 column to save memory
+        df_redu.drop(columns=['filename_2'], inplace=True)
+        
+        print(f"Loaded ReDU metadata with {len(df_redu):,} rows and {len(df_redu.columns)} columns")
+        print(f"Memory usage: {df_redu.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        
         return df_redu, file_date
     except Exception as e:
         print(f"Error loading ReDU metadata: {str(e)}")
