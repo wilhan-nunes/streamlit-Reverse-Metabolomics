@@ -21,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8000M
+          memory: 16000M
     environment:
       VIRTUAL_HOST: reverse-metabolomics.gnps2.org
       VIRTUAL_PORT: 5000
