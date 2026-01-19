@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -214,7 +212,6 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
     return pivot_table
 
 
-
 def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_filter: str | list = "All organisms"):
     """Filter the merged dataframe according to organism inputs"""
 
@@ -237,7 +234,6 @@ def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_
         df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(organism_filter)]
         df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(organism_filter)]
         return df_filtered, df_redu_filtered
-
 
 
 def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
@@ -437,6 +433,173 @@ def create_heatmap_section(df_filtered, df_redu_filtered, analysis_column):
         st.info("No data available to generate heatmap with current filters.", icon="ℹ️")
 
 
+@st.fragment
+def create_bar_chart_section(df_filtered, df_redu_filtered, analysis_column, compound_name):
+    """Generate bar chart visualization for single USI queries"""
+    import matplotlib.pyplot as plt
+    
+    st.header("📊 Bar Chart Visualization")
+    st.caption(f"Distribution of spectral matches for **{compound_name}**")
+
+    # Bar chart options
+    col1, col2 = st.columns(2)
+    with col1:
+        chart_type = st.selectbox(
+            "Chart type:",
+            options=['Raw counts', 'ReDU-normalized counts'],
+            help="Choose the type of bar chart to generate",
+            key='bar_chart_type'
+        )
+    
+    with col2:
+        sort_order = st.selectbox(
+            "Sort by:",
+            options=['Descending (highest first)', 'Ascending (lowest first)', 'Alphabetical'],
+            help="Choose how to sort the bars",
+            key='bar_sort_order'
+        )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        orientation = st.radio(
+            "Orientation:",
+            options=['Horizontal', 'Vertical'],
+            horizontal=True,
+            key='bar_orientation'
+        )
+    with col2:
+        show_values = st.checkbox("Show values on bars", value=True, key='bar_show_values')
+
+    if len(df_filtered) > 0:
+        with st.spinner("Generating bar chart..."):
+            try:
+                # Apply exclusions if any
+                if variable_to_exclude:
+                    drop_mask = df_filtered[analysis_column].isin(variable_to_exclude)
+                    indices_to_drop = df_filtered[drop_mask].index
+                    df_filtered = df_filtered.drop(indices_to_drop)
+
+                # Get counts
+                counts_data = df_filtered[analysis_column].value_counts().reset_index()
+                counts_data.columns = [analysis_column, 'Counts']
+
+                # Apply ReDU normalization if selected
+                normalize_redu = chart_type == 'ReDU-normalized counts'
+                if normalize_redu:
+                    df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
+                    df_redu_counts.columns = [analysis_column, 'ReDU_Counts']
+                    
+                    counts_data = pd.merge(counts_data, df_redu_counts, on=analysis_column, how='left')
+                    counts_data['Normalized'] = (counts_data['Counts'] / counts_data['ReDU_Counts']) * 100
+                    counts_data = counts_data.dropna(subset=['Normalized'])
+                    value_column = 'Normalized'
+                    ylabel = 'Normalized spectral matches (%)'
+                else:
+                    value_column = 'Counts'
+                    ylabel = 'Spectral matches'
+
+                # Sort data
+                if sort_order == 'Descending (highest first)':
+                    counts_data = counts_data.sort_values(value_column, ascending=False)
+                elif sort_order == 'Ascending (lowest first)':
+                    counts_data = counts_data.sort_values(value_column, ascending=True)
+                else:  # Alphabetical
+                    counts_data = counts_data.sort_values(analysis_column, ascending=True)
+
+                # Create figure
+                num_categories = len(counts_data)
+                if orientation == 'Horizontal':
+                    fig_height = max(4, num_categories * 0.4)
+                    fig_width = 10
+                else:
+                    fig_width = max(8, num_categories * 0.5)
+                    fig_height = 6
+
+                fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+                # Create bar plot
+                if orientation == 'Horizontal':
+                    bars = ax.barh(
+                        counts_data[analysis_column],
+                        counts_data[value_column],
+                        color=sns.color_palette("Blues_r", n_colors=num_categories),
+                        edgecolor='white',
+                        linewidth=0.5
+                    )
+                    ax.set_xlabel(ylabel)
+                    ax.set_ylabel(analysis_column)
+                    ax.invert_yaxis()  # Highest at top
+                    
+                    if show_values:
+                        for bar, val in zip(bars, counts_data[value_column]):
+                            width = bar.get_width()
+                            label = f'{val:.1f}%' if normalize_redu else f'{int(val)}'
+                            ax.text(width + (ax.get_xlim()[1] * 0.01), bar.get_y() + bar.get_height()/2,
+                                   label, va='center', ha='left', fontsize=9)
+                else:
+                    bars = ax.bar(
+                        counts_data[analysis_column],
+                        counts_data[value_column],
+                        color=sns.color_palette("Blues_r", n_colors=num_categories),
+                        edgecolor='white',
+                        linewidth=0.5
+                    )
+                    ax.set_ylabel(ylabel)
+                    ax.set_xlabel(analysis_column)
+                    plt.xticks(rotation=45, ha='right')
+                    
+                    if show_values:
+                        for bar, val in zip(bars, counts_data[value_column]):
+                            height = bar.get_height()
+                            label = f'{val:.1f}%' if normalize_redu else f'{int(val)}'
+                            ax.text(bar.get_x() + bar.get_width()/2, height + (ax.get_ylim()[1] * 0.01),
+                                   label, ha='center', va='bottom', fontsize=9, rotation=0)
+
+                ax.set_title(f'{compound_name} - Distribution by {analysis_column}', fontsize=14, weight='bold', pad=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                
+                plt.tight_layout()
+
+                # Display chart
+                with st.container(border=True):
+                    st.pyplot(fig)
+
+                # Download options
+                col_a, col_b = st.columns(2)
+
+                with col_a:
+                    # Download data table
+                    csv_data = counts_data.to_csv(index=False)
+                    st.download_button(
+                        label="Download data table",
+                        data=csv_data,
+                        file_name=f"bar_chart_data_{analysis_column}_{chart_type.replace(' ', '_').lower()}.csv",
+                        mime="text/csv",
+                        icon=":material/download:"
+                    )
+
+                with col_b:
+                    # Download plot as SVG
+                    img_buffer = io.BytesIO()
+                    fig.savefig(img_buffer, format='svg', bbox_inches='tight')
+                    img_buffer.seek(0)
+
+                    st.download_button(
+                        label="Download chart (SVG)",
+                        data=img_buffer.getvalue(),
+                        file_name=f"bar_chart_{analysis_column}_{chart_type.replace(' ', '_').lower()}.svg",
+                        mime="image/svg+xml",
+                        icon=":material/download:",
+                    )
+
+                plt.close(fig)
+
+            except Exception as e:
+                st.error(f"Error generating bar chart: {str(e)}")
+    else:
+        st.info("No data available to generate bar chart with current filters.", icon="ℹ️")
+
 
 # Sidebar for inputs
 with st.sidebar:
@@ -450,13 +613,18 @@ with st.sidebar:
                               )
 
     if use_example:
+
+        def clean_example_data():
+            st.session_state.pop("results", None)
+            st.session_state.pop("df_merged", None)
+
         selected_example = st.selectbox(
             "Select example dataset:",
-            options=['Example Set 1', 'Example Set 2'],
+            options=["Example Set 1", "Example Set 2"],
             help="Choose which example dataset to load",
-            on_change=lambda: st.session_state.pop('results', None)
+            on_change=clean_example_data,
         )
-        if selected_example == 'Example Set 1':
+        if selected_example == "Example Set 1":
             data = pd.DataFrame(EXAMPLE_SET_1)
         elif selected_example == 'Example Set 2':
             data = pd.DataFrame(EXAMPLE_SET_2)
@@ -469,7 +637,7 @@ with st.sidebar:
     query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
     st.session_state.masst_query_params = masst_query_params
-    
+
     # Change button label and behavior based on example mode
     if use_example:
         button_label = "Load Example Data"
@@ -477,7 +645,7 @@ with st.sidebar:
     else:
         button_label = "Run MASST Query"
         button_icon = "🔎"
-    
+
     st.session_state['run_masst_query'] = st.button(
         button_label, 
         icon=button_icon, 
@@ -490,7 +658,7 @@ with st.sidebar:
         st.session_state.clear()
         st.session_state["use_example"] = False
         st.rerun()
-        
+
     st.markdown(f"**ReDU metadata last updated:** {file_date}")
 
     st.subheader("Contributors")
@@ -637,7 +805,16 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
 
         with col2:
-            create_heatmap_section(df_filtered, df_redu_filtered, analysis_column)
+            # Determine if single or multiple USI query
+            num_compounds = df_filtered['Compound'].nunique()
+            
+            if num_compounds == 1:
+                # Single USI - show bar chart
+                compound_name = df_filtered['Compound'].iloc[0]
+                create_bar_chart_section(df_filtered, df_redu_filtered, analysis_column, compound_name)
+            else:
+                # Multiple USIs - show heatmap
+                create_heatmap_section(df_filtered, df_redu_filtered, analysis_column)
 
         # Data preview
         st.header(":mag: Data Preview")
