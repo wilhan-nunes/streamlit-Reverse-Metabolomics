@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import requests
 
+from utils.query_params import sync_param, get_default
+
 
 FALLBACK_OPTIONS = [
     "gnpsdata_index",
@@ -40,20 +42,36 @@ def get_database_options():
         return FALLBACK_OPTIONS
 
 
-def create_masst_sidebar(disabled: bool = False) -> dict:
-    """Create sidebar widgets for MASST parameters and return the values"""
+def create_masst_sidebar(disabled: bool = False, initial_params: dict = None) -> dict:
+    """Create sidebar widgets for MASST parameters and return the values.
+    
+    Args:
+        disabled: Whether to disable all widgets
+        initial_params: Optional dict with initial values from query params
+                       Keys: database, analog, precursor_tol, fragment_tol, min_cos
+    """
+    if initial_params is None:
+        initial_params = {}
 
     with st.sidebar:
         with st.expander("MASST Query Parameters", icon=':material/settings:', expanded=False):
 
             # Database selection
             options_list = sorted(get_database_options())
+            
+            # Get initial database value
+            initial_db = initial_params.get('database', get_default('database'))
+            if initial_db not in options_list:
+                initial_db = get_default('database')
+            db_index = options_list.index(initial_db) if initial_db in options_list else 0
+            
             database = st.selectbox(
                 "Database",
                 options=options_list,
-                index=options_list.index("metabolomicspanrepo_index_latest") if "metabolomicspanrepo_index_latest" in options_list else 0,
+                index=db_index,
                 help="Type of database to search",
-                disabled=disabled
+                disabled=disabled,
+                key='masst_database'
             )
 
             # # MASST type
@@ -65,49 +83,64 @@ def create_masst_sidebar(disabled: bool = False) -> dict:
             # )
 
             # Analog search
+            initial_analog = initial_params.get('analog', get_default('analog'))
             analog = st.selectbox(
                 "Analog Search",
                 options=["No", "Yes"],
-                index=0,
+                index=1 if initial_analog else 0,
                 help="Perform analog search",
-                disabled=disabled
+                disabled=disabled,
+                key='masst_analog'
             )
 
             # Tolerance parameters
             st.subheader("Tolerance Parameters")
 
+            initial_precursor = initial_params.get('precursor_tol', get_default('precursor_tol'))
             precursor_tolerance = st.number_input(
                 "Precursor m/z Tolerance",
                 min_value=0.001,
                 max_value=1.0,
-                value=0.02,
+                value=float(initial_precursor),
                 step=0.001,
                 format="%.3f",
                 help="Precursor mass tolerance",
-                disabled=disabled
+                disabled=disabled,
+                key='masst_precursor_tol'
             )
 
+            initial_fragment = initial_params.get('fragment_tol', get_default('fragment_tol'))
             fragment_tolerance = st.number_input(
                 "Fragment m/z Tolerance",
                 min_value=0.001,
                 max_value=1.0,
-                value=0.02,
+                value=float(initial_fragment),
                 step=0.001,
                 format="%.3f",
                 help="Fragment mass tolerance",
-                disabled=disabled
+                disabled=disabled,
+                key='masst_fragment_tol'
             )
 
             # Cosine threshold
+            initial_cos = initial_params.get('min_cos', get_default('min_cos'))
             cosine_threshold = st.number_input(
                 "Cosine Similarity Threshold",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.7,
+                value=float(initial_cos),
                 step=0.01,
                 help="Minimum cosine similarity score",
-                disabled=disabled
+                disabled=disabled,
+                key='masst_min_cos'
             )
+
+        # Sync parameters to URL in real-time
+        sync_param('database', database)
+        sync_param('analog', analog == "Yes")
+        sync_param('precursor_tol', precursor_tolerance)
+        sync_param('fragment_tol', fragment_tolerance)
+        sync_param('min_cos', cosine_threshold)
 
         return {
             'database': database,
@@ -119,8 +152,14 @@ def create_masst_sidebar(disabled: bool = False) -> dict:
         }
 
 
-def create_usi_input(disabled: bool = False, usi_data: pd.DataFrame = None) -> pd.DataFrame:
-    """Create main area input for USI data"""
+def create_usi_input(disabled: bool = False, usi_data: pd.DataFrame = None, sync_url: bool = True) -> pd.DataFrame:
+    """Create main area input for USI data.
+    
+    Args:
+        disabled: Whether to disable the widget
+        usi_data: Initial DataFrame with 'usi' and 'compound_name' columns
+        sync_url: Whether to sync changes to URL query params
+    """
     with st.sidebar:
         st.subheader("USI Input Data", help='Enter one USI per line in the data editor below. You can add more rows as necessary.' )
 
@@ -152,7 +191,12 @@ def create_usi_input(disabled: bool = False, usi_data: pd.DataFrame = None) -> p
                     help="Name or identifier for the compound",
                     width="medium"
                 )
-            }
+            },
+            key='usi_data_editor'
         )
+        
+        # Sync USI data to URL (only if not using example data)
+        if sync_url and not st.session_state.get('use_example', False):
+            sync_param('usi', edited_data)
 
     return edited_data

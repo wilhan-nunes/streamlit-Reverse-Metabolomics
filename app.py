@@ -14,6 +14,7 @@ import time
 
 from masst_sidebar import create_masst_sidebar, create_usi_input
 from masst_client import masst_query_all
+from utils.query_params import load_all_params, sync_param, get_default, clear_all_params, get_param_schema
 
 
 def get_git_short_rev():
@@ -602,12 +603,24 @@ def create_bar_chart_section(df_filtered, df_redu_filtered, analysis_column, com
 
 
 # Sidebar for inputs
+# Load query parameters from URL (only on first load)
+if '_query_params_loaded' not in st.session_state:
+    st.session_state._url_params = load_all_params()
+    st.session_state._query_params_loaded = True
+else:
+    st.session_state._url_params = st.session_state.get('_url_params', {})
+
+url_params = st.session_state._url_params
+
 with st.sidebar:
     st.header("📁 Data Input")
 
+    # Determine initial example state from URL params
+    initial_example = url_params.get('example')
+    
     # Example data option
     use_example = st.checkbox("Load example data", 
-                              value=False, 
+                              value=initial_example is not None, 
                               help="Use built-in example files instead of uploading your own", 
                               key='use_example'
                               )
@@ -618,21 +631,36 @@ with st.sidebar:
             st.session_state.pop("results", None)
             st.session_state.pop("df_merged", None)
 
+        # Set initial selection based on URL param
+        example_options = ["Example Set 1", "Example Set 2"]
+        if initial_example == '2':
+            initial_example_idx = 1
+        else:
+            initial_example_idx = 0
+            
         selected_example = st.selectbox(
             "Select example dataset:",
-            options=["Example Set 1", "Example Set 2"],
+            options=example_options,
+            index=initial_example_idx,
             help="Choose which example dataset to load",
             on_change=clean_example_data,
         )
         if selected_example == "Example Set 1":
             data = pd.DataFrame(EXAMPLE_SET_1)
+            # Sync example selection to URL
+            sync_param('example', '1')
         elif selected_example == 'Example Set 2':
             data = pd.DataFrame(EXAMPLE_SET_2)
+            sync_param('example', '2')
     else:
-        data = None
+        # Load USI data from URL params if available
+        data = url_params.get('usi')
+        # Clear example from URL when not using example
+        if 'example' in st.query_params:
+            del st.query_params['example']
 
-    usi_data = create_usi_input(usi_data=data)
-    masst_query_params = create_masst_sidebar()
+    usi_data = create_usi_input(usi_data=data, sync_url=not use_example)
+    masst_query_params = create_masst_sidebar(initial_params=url_params)
     # Filter out empty rows
     query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
@@ -657,6 +685,8 @@ with st.sidebar:
     if st.button("Run new query", type="secondary", icon=":material/replay:",use_container_width=True):
         st.session_state.clear()
         st.session_state["use_example"] = False
+        # Clear URL query parameters
+        clear_all_params()
         st.rerun()
 
     st.markdown(f"**ReDU metadata last updated:** {file_date}")
@@ -678,6 +708,10 @@ with st.sidebar:
         - [MASST Documentation](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/masst/)
         - [Fast Search Page](https://fasst.gnps2.org/fastsearch/)
         """)
+
+    with st.expander("API Reference"):
+        st.markdown("**Parameter Schema**")
+        st.json(get_param_schema())
 
 
 if st.session_state.get('run_masst_query', False):
@@ -716,12 +750,24 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
             # available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
 
+            # Get initial organism from URL params
+            initial_organism = url_params.get('organism', get_default('organism'))
+            organism_options = ['Humans', 'Rodents', 'All organisms', "Manual Entry"]
+            if initial_organism in organism_options:
+                initial_org_idx = organism_options.index(initial_organism)
+            else:
+                initial_org_idx = 0  # Default to Humans
+
             organism_choice = st.selectbox(
                 "Select organism:",
-                options=['Humans', 'Rodents', 'All organisms', "Manual Entry"],
+                options=organism_options,
+                index=initial_org_idx,
                 help="Filter data by organism type",
                 key='organism_choice'
             )
+            
+            # Sync organism to URL
+            sync_param('organism', organism_choice)
 
             if organism_choice == "Manual Entry":
                 organism_choice = st.multiselect(
