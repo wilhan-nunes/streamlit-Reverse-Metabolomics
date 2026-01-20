@@ -7,14 +7,15 @@ import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
 from streamlit.components.v1 import html
-from dotenv import load_dotenv
 from welcome import welcome_page
 from download_redu import load_redu
 import time
+from matplotlib import pyplot as plt
 
 from masst_sidebar import create_masst_sidebar, create_usi_input
 from masst_client import masst_query_all
 from utils.query_params import load_all_params, sync_param, get_default, clear_all_params, get_param_schema
+from utils.retrieve_dataset_metadata import display_metabolomics_metadata
 
 
 def get_git_short_rev():
@@ -602,6 +603,125 @@ def create_bar_chart_section(df_filtered, df_redu_filtered, analysis_column, com
         st.info("No data available to generate bar chart with current filters.", icon="ℹ️")
 
 
+@st.fragment
+def render_datasets_distribution(df_filtered, analisys_col, unique_organs):
+    """Render dataset distribution bar chart"""
+
+    if len(df_filtered) > 0:
+        col1, col2 = st.columns(2)
+        with col1:
+            compounds = df_filtered['Compound'].unique().tolist()
+            compounds.insert(0, "All compounds")
+            compound_selection = st.selectbox("Select compound", compounds, key="dataset_distribution_compound")
+        with col2:
+            unique_options = df_filtered[analisys_col].unique().tolist()
+            unique_options.sort()
+            unique_options.insert(0, "All")
+            strata_selection = st.selectbox("Stratify by", unique_options, key="stratify_by")
+
+        with st.spinner("Generating dataset distribution chart..."):
+            try:
+                # Apply filters based on selections
+                dataset_subset = df_filtered.copy()
+                
+                if compound_selection != "All compounds":
+                    dataset_subset = dataset_subset[dataset_subset['Compound'] == compound_selection]
+                
+                if strata_selection != "All":
+                    dataset_subset = dataset_subset[dataset_subset[analisys_col] == strata_selection]
+                
+                dataset_counts = dataset_subset['Dataset'].value_counts().reset_index()
+                dataset_counts.columns = ['Dataset', 'Counts']
+
+                fig, ax = plt.subplots(figsize=(10, 6))
+                bars = ax.barh(
+                    dataset_counts['Dataset'],
+                    dataset_counts['Counts'],
+                    color=sns.color_palette("Greens_r", n_colors=len(dataset_counts)),
+                    edgecolor='white',
+                    linewidth=0.5
+                )
+                ax.set_xlabel(f'Spectral matches for {compound_selection}')
+                ax.set_ylabel('Dataset')
+                ax.invert_yaxis()  # Highest at top
+
+                for bar, val in zip(bars, dataset_counts['Counts']):
+                    width = bar.get_width()
+                    ax.text(width + (ax.get_xlim()[1] * 0.01), bar.get_y() + bar.get_height()/2,
+                            f'{int(val)}', va='center', ha='left', fontsize=9)
+
+                # Build title based on selections
+                title_parts = []
+                if compound_selection != "All compounds":
+                    title_parts.append(compound_selection)
+                if strata_selection != "All":
+                    title_parts.append(strata_selection)
+                chart_title = ' - '.join(title_parts) if title_parts else 'All Data'
+                
+                ax.set_title(f'Spectral Matches: {chart_title}', fontsize=14, weight='bold', pad=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+
+                plt.tight_layout()
+
+                with st.container(border=True):
+                    st.pyplot(fig)
+
+                # Download options
+                csv_data = dataset_counts.to_csv(index=False)
+                st.download_button(
+                    label="Download dataset distribution data",
+                    data=csv_data,
+                    file_name="dataset_distribution_data.csv",
+                    mime="text/csv",
+                    icon=":material/download:"
+                )
+
+                img_buffer = io.BytesIO()
+                fig.savefig(img_buffer, format='svg', bbox_inches='tight')
+                img_buffer.seek(0)
+
+                st.download_button(
+                    label="Download dataset distribution chart (SVG)",
+                    data=img_buffer.getvalue(),
+                    file_name="dataset_distribution_chart.svg",
+                    mime="image/svg+xml",
+                    icon=":material/download:",
+                )
+
+                plt.close(fig)
+
+            except Exception as e:
+                st.error(f"Error generating dataset distribution chart: {str(e)}")
+    else:
+        st.info("No data available to generate dataset distribution chart with current filters.", icon="ℹ️")
+
+
+@st.fragment
+def render_dataset_details_card(unique_datasets):
+    """Render dataset details card"""
+    st.header("🗂️ Dataset Details")
+    dataset_id = st.selectbox("Select datasets to view details:", options=unique_datasets, key="massive_dataset_selection")
+
+    
+    if dataset_id:
+        display_metabolomics_metadata(dataset_id)
+    else:
+
+        st.markdown(
+            """
+            The datasets analyzed in this tool are sourced from the [MASSIVE](https://massive.ucsd.edu/) repository, which is a comprehensive resource for mass spectrometry data. 
+            For more information about a specific dataset, please visit the MASSIVE website and use the dataset accession number provided in the results.
+            
+            **How to find dataset details:**
+            1. Go to the [MASSIVE website](https://massive.ucsd.edu/).
+            2. Use the search bar to enter the dataset accession number (e.g., MSV000083437).
+            3. Explore the dataset page for detailed information including experimental design, sample metadata, and associated publications.
+            
+            For any questions or further assistance, please refer to the [MASSIVE FAQ](https://massive.ucsd.edu/FAQ.jsp) or contact the MASSIVE support team.
+            """
+        )
+
 # Sidebar for inputs
 # Load query parameters from URL (only on first load)
 if '_query_params_loaded' not in st.session_state:
@@ -864,18 +984,27 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
         # Data preview
         st.header(":mag: Data Preview")
-        st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
-        st.dataframe(df_filtered.head(100))
+        preview_col, datasets_fig_col = st.columns([1, 1])
+        with datasets_fig_col:
+            # Datasets distribution plot
+            st.subheader("Datasets Distribution", help="Distribution of spectral matches across datasets")
+            render_datasets_distribution(df_filtered, analysis_column, unique_options)
+        with preview_col:
+            st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
+            st.dataframe(df_filtered.head(100))
 
-        # Download full dataset
-        csv_full = df_filtered.to_csv(index=False)
-        st.download_button(
-            label="📥 Download full merged dataset",
-            data=csv_full,
-            file_name=f"merged_dataset.csv",
-            mime="text/csv",
-            disabled= not len(df_filtered) > 0,
-        )
+            # Download full dataset
+            csv_full = df_filtered.to_csv(index=False)
+            st.download_button(
+                label="📥 Download full merged dataset",
+                data=csv_full,
+                file_name=f"merged_dataset.csv",
+                mime="text/csv",
+                disabled= not len(df_filtered) > 0,
+            )
+        
+        unique_datasets = df_filtered['Dataset'].unique().tolist()
+        render_dataset_details_card(unique_datasets)
 
     except Exception as e:
         st.error(f"❌ Error processing data: {str(e)}")
