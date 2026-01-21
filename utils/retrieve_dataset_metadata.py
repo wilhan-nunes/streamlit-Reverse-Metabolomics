@@ -387,7 +387,6 @@ def display_metabolomics_metadata(dataset_id: str) -> None:
 
             elif repository == DataRepository.METABOLIGHTS:
                 data = fetch_metabolights_metadata(dataset_id)
-                st.write(data)
                 display_metabolights_metadata(data, dataset_id)
 
             elif repository == DataRepository.WORKBENCH:

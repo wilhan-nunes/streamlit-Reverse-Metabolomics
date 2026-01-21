@@ -608,7 +608,7 @@ def render_datasets_distribution(df_filtered, analisys_col, unique_organs):
     """Render dataset distribution bar chart"""
 
     if len(df_filtered) > 0:
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             compounds = df_filtered['Compound'].unique().tolist()
             compounds.insert(0, "All compounds")
@@ -618,6 +618,15 @@ def render_datasets_distribution(df_filtered, analisys_col, unique_organs):
             unique_options.sort()
             unique_options.insert(0, "All")
             strata_selection = st.selectbox("Stratify by", unique_options, key="stratify_by")
+        with col3:
+            st.session_state['dataset_chart_height'] = st.slider(
+            "Chart height:",
+            min_value=3,
+            max_value=15,
+            value=st.session_state.get('dataset_chart_height', 6),
+            step=1,
+            key="dataset_chart_height_slider"
+            )
 
         with st.spinner("Generating dataset distribution chart..."):
             try:
@@ -633,7 +642,7 @@ def render_datasets_distribution(df_filtered, analisys_col, unique_organs):
                 dataset_counts = dataset_subset['Dataset'].value_counts().reset_index()
                 dataset_counts.columns = ['Dataset', 'Counts']
 
-                fig, ax = plt.subplots(figsize=(10, 6))
+                fig, ax = plt.subplots(figsize=(10, st.session_state.get('dataset_chart_height', 6)))
                 bars = ax.barh(
                     dataset_counts['Dataset'],
                     dataset_counts['Counts'],
@@ -707,20 +716,7 @@ def render_dataset_details_card(unique_datasets):
     if dataset_id:
         display_metabolomics_metadata(dataset_id)
     else:
-
-        st.markdown(
-            """
-            The datasets analyzed in this tool are sourced from the [MASSIVE](https://massive.ucsd.edu/) repository, which is a comprehensive resource for mass spectrometry data. 
-            For more information about a specific dataset, please visit the MASSIVE website and use the dataset accession number provided in the results.
-            
-            **How to find dataset details:**
-            1. Go to the [MASSIVE website](https://massive.ucsd.edu/).
-            2. Use the search bar to enter the dataset accession number (e.g., MSV000083437).
-            3. Explore the dataset page for detailed information including experimental design, sample metadata, and associated publications.
-            
-            For any questions or further assistance, please refer to the [MASSIVE FAQ](https://massive.ucsd.edu/FAQ.jsp) or contact the MASSIVE support team.
-            """
-        )
+        st.info("No datasets available to display.", icon="ℹ️")
 
 # Sidebar for inputs
 # Load query parameters from URL (only on first load)
