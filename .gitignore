@@ -3,3 +3,4 @@
 *.pyc
 REDU_metadata.tsv
 .env
+*.parquet

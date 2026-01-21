@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,14 +6,17 @@ import scipy.spatial.distance as ssd
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
+import urllib.parse
 from streamlit.components.v1 import html
-from dotenv import load_dotenv
 from welcome import welcome_page
 from download_redu import load_redu
 import time
+from matplotlib import pyplot as plt
 
 from masst_sidebar import create_masst_sidebar, create_usi_input
 from masst_client import masst_query_all
+from utils.query_params import load_all_params, sync_param, get_default, clear_all_params, get_param_schema
+from utils.retrieve_dataset_metadata import display_metabolomics_metadata
 
 
 def get_git_short_rev():
@@ -214,7 +215,6 @@ def prepare_pivot_table(df, column_interest, compound, log_transform=False, norm
     return pivot_table
 
 
-
 def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_filter: str | list = "All organisms"):
     """Filter the merged dataframe according to organism inputs"""
 
@@ -237,7 +237,6 @@ def filter_by_organism(df_merged: pd.DataFrame, df_redu: pd.DataFrame, organism_
         df_filtered = df_merged[df_merged['NCBITaxonomy'].isin(organism_filter)]
         df_redu_filtered = df_redu[df_redu['NCBITaxonomy'].isin(organism_filter)]
         return df_filtered, df_redu_filtered
-
 
 
 def create_heatmap(pivot_table, variable, metric, log_scale=False, normalize=False,
@@ -437,39 +436,353 @@ def create_heatmap_section(df_filtered, df_redu_filtered, analysis_column):
         st.info("No data available to generate heatmap with current filters.", icon="ℹ️")
 
 
+@st.fragment
+def create_bar_chart_section(df_filtered, df_redu_filtered, analysis_column, compound_name):
+    """Generate bar chart visualization for single USI queries"""
+    import matplotlib.pyplot as plt
+    
+    st.header("📊 Bar Chart Visualization")
+    st.caption(f"Distribution of spectral matches for **{compound_name}**")
+
+    # Bar chart options
+    col1, col2 = st.columns(2)
+    with col1:
+        chart_type = st.selectbox(
+            "Chart type:",
+            options=['Raw counts', 'ReDU-normalized counts'],
+            help="Choose the type of bar chart to generate",
+            key='bar_chart_type'
+        )
+    
+    with col2:
+        sort_order = st.selectbox(
+            "Sort by:",
+            options=['Descending (highest first)', 'Ascending (lowest first)', 'Alphabetical'],
+            help="Choose how to sort the bars",
+            key='bar_sort_order'
+        )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        orientation = st.radio(
+            "Orientation:",
+            options=['Horizontal', 'Vertical'],
+            horizontal=True,
+            key='bar_orientation'
+        )
+    with col2:
+        show_values = st.checkbox("Show values on bars", value=True, key='bar_show_values')
+
+    if len(df_filtered) > 0:
+        with st.spinner("Generating bar chart..."):
+            try:
+                # Apply exclusions if any
+                if variable_to_exclude:
+                    drop_mask = df_filtered[analysis_column].isin(variable_to_exclude)
+                    indices_to_drop = df_filtered[drop_mask].index
+                    df_filtered = df_filtered.drop(indices_to_drop)
+
+                # Get counts
+                counts_data = df_filtered[analysis_column].value_counts().reset_index()
+                counts_data.columns = [analysis_column, 'Counts']
+
+                # Apply ReDU normalization if selected
+                normalize_redu = chart_type == 'ReDU-normalized counts'
+                if normalize_redu:
+                    df_redu_counts = df_redu_filtered[analysis_column].value_counts().reset_index()
+                    df_redu_counts.columns = [analysis_column, 'ReDU_Counts']
+                    
+                    counts_data = pd.merge(counts_data, df_redu_counts, on=analysis_column, how='left')
+                    counts_data['Normalized'] = (counts_data['Counts'] / counts_data['ReDU_Counts']) * 100
+                    counts_data = counts_data.dropna(subset=['Normalized'])
+                    value_column = 'Normalized'
+                    ylabel = 'Normalized spectral matches (%)'
+                else:
+                    value_column = 'Counts'
+                    ylabel = 'Spectral matches'
+
+                # Sort data
+                if sort_order == 'Descending (highest first)':
+                    counts_data = counts_data.sort_values(value_column, ascending=False)
+                elif sort_order == 'Ascending (lowest first)':
+                    counts_data = counts_data.sort_values(value_column, ascending=True)
+                else:  # Alphabetical
+                    counts_data = counts_data.sort_values(analysis_column, ascending=True)
+
+                # Create figure
+                num_categories = len(counts_data)
+                if orientation == 'Horizontal':
+                    fig_height = max(4, num_categories * 0.4)
+                    fig_width = 10
+                else:
+                    fig_width = max(8, num_categories * 0.5)
+                    fig_height = 6
+
+                fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+                # Create bar plot
+                if orientation == 'Horizontal':
+                    bars = ax.barh(
+                        counts_data[analysis_column],
+                        counts_data[value_column],
+                        color=sns.color_palette("Blues_r", n_colors=num_categories),
+                        edgecolor='white',
+                        linewidth=0.5
+                    )
+                    ax.set_xlabel(ylabel)
+                    ax.set_ylabel(analysis_column)
+                    ax.invert_yaxis()  # Highest at top
+                    
+                    if show_values:
+                        for bar, val in zip(bars, counts_data[value_column]):
+                            width = bar.get_width()
+                            label = f'{val:.1f}%' if normalize_redu else f'{int(val)}'
+                            ax.text(width + (ax.get_xlim()[1] * 0.01), bar.get_y() + bar.get_height()/2,
+                                   label, va='center', ha='left', fontsize=9)
+                else:
+                    bars = ax.bar(
+                        counts_data[analysis_column],
+                        counts_data[value_column],
+                        color=sns.color_palette("Blues_r", n_colors=num_categories),
+                        edgecolor='white',
+                        linewidth=0.5
+                    )
+                    ax.set_ylabel(ylabel)
+                    ax.set_xlabel(analysis_column)
+                    plt.xticks(rotation=45, ha='right')
+                    
+                    if show_values:
+                        for bar, val in zip(bars, counts_data[value_column]):
+                            height = bar.get_height()
+                            label = f'{val:.1f}%' if normalize_redu else f'{int(val)}'
+                            ax.text(bar.get_x() + bar.get_width()/2, height + (ax.get_ylim()[1] * 0.01),
+                                   label, ha='center', va='bottom', fontsize=9, rotation=0)
+
+                ax.set_title(f'{compound_name} - Distribution by {analysis_column}', fontsize=14, weight='bold', pad=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                
+                plt.tight_layout()
+
+                # Display chart
+                with st.container(border=True):
+                    st.pyplot(fig)
+
+                # Download options
+                col_a, col_b = st.columns(2)
+
+                with col_a:
+                    # Download data table
+                    csv_data = counts_data.to_csv(index=False)
+                    st.download_button(
+                        label="Download data table",
+                        data=csv_data,
+                        file_name=f"bar_chart_data_{analysis_column}_{chart_type.replace(' ', '_').lower()}.csv",
+                        mime="text/csv",
+                        icon=":material/download:"
+                    )
+
+                with col_b:
+                    # Download plot as SVG
+                    img_buffer = io.BytesIO()
+                    fig.savefig(img_buffer, format='svg', bbox_inches='tight')
+                    img_buffer.seek(0)
+
+                    st.download_button(
+                        label="Download chart (SVG)",
+                        data=img_buffer.getvalue(),
+                        file_name=f"bar_chart_{analysis_column}_{chart_type.replace(' ', '_').lower()}.svg",
+                        mime="image/svg+xml",
+                        icon=":material/download:",
+                    )
+
+                plt.close(fig)
+
+            except Exception as e:
+                st.error(f"Error generating bar chart: {str(e)}")
+    else:
+        st.info("No data available to generate bar chart with current filters.", icon="ℹ️")
+
+
+@st.fragment
+def render_datasets_distribution(df_filtered, analisys_col, unique_organs):
+    """Render dataset distribution bar chart"""
+
+    if len(df_filtered) > 0:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            compounds = df_filtered['Compound'].unique().tolist()
+            compounds.insert(0, "All compounds")
+            compound_selection = st.selectbox("Select compound", compounds, key="dataset_distribution_compound")
+        with col2:
+            unique_options = df_filtered[analisys_col].unique().tolist()
+            unique_options.sort()
+            unique_options.insert(0, "All")
+            strata_selection = st.selectbox("Stratify by", unique_options, key="stratify_by")
+        with col3:
+            st.session_state['dataset_chart_height'] = st.slider(
+            "Chart height:",
+            min_value=3,
+            max_value=15,
+            value=st.session_state.get('dataset_chart_height', 6),
+            step=1,
+            key="dataset_chart_height_slider"
+            )
+
+        with st.spinner("Generating dataset distribution chart..."):
+            try:
+                # Apply filters based on selections
+                dataset_subset = df_filtered.copy()
+                
+                if compound_selection != "All compounds":
+                    dataset_subset = dataset_subset[dataset_subset['Compound'] == compound_selection]
+                
+                if strata_selection != "All":
+                    dataset_subset = dataset_subset[dataset_subset[analisys_col] == strata_selection]
+                
+                dataset_counts = dataset_subset['Dataset'].value_counts().reset_index()
+                dataset_counts.columns = ['Dataset', 'Counts']
+
+                fig, ax = plt.subplots(figsize=(10, st.session_state.get('dataset_chart_height', 6)))
+                bars = ax.barh(
+                    dataset_counts['Dataset'],
+                    dataset_counts['Counts'],
+                    color=sns.color_palette("Greens_r", n_colors=len(dataset_counts)),
+                    edgecolor='white',
+                    linewidth=0.5
+                )
+                ax.set_xlabel(f'Spectral matches for {compound_selection}')
+                ax.set_ylabel('Dataset')
+                ax.invert_yaxis()  # Highest at top
+
+                for bar, val in zip(bars, dataset_counts['Counts']):
+                    width = bar.get_width()
+                    ax.text(width + (ax.get_xlim()[1] * 0.01), bar.get_y() + bar.get_height()/2,
+                            f'{int(val)}', va='center', ha='left', fontsize=9)
+
+                # Build title based on selections
+                title_parts = []
+                if compound_selection != "All compounds":
+                    title_parts.append(compound_selection)
+                if strata_selection != "All":
+                    title_parts.append(strata_selection)
+                chart_title = ' - '.join(title_parts) if title_parts else 'All Data'
+                
+                ax.set_title(f'Spectral Matches: {chart_title}', fontsize=14, weight='bold', pad=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+
+                plt.tight_layout()
+
+                with st.container(border=True):
+                    st.pyplot(fig)
+
+                # Download options
+                csv_data = dataset_counts.to_csv(index=False)
+                st.download_button(
+                    label="Download dataset distribution data",
+                    data=csv_data,
+                    file_name="dataset_distribution_data.csv",
+                    mime="text/csv",
+                    icon=":material/download:"
+                )
+
+                img_buffer = io.BytesIO()
+                fig.savefig(img_buffer, format='svg', bbox_inches='tight')
+                img_buffer.seek(0)
+
+                st.download_button(
+                    label="Download dataset distribution chart (SVG)",
+                    data=img_buffer.getvalue(),
+                    file_name="dataset_distribution_chart.svg",
+                    mime="image/svg+xml",
+                    icon=":material/download:",
+                )
+
+                plt.close(fig)
+
+            except Exception as e:
+                st.error(f"Error generating dataset distribution chart: {str(e)}")
+    else:
+        st.info("No data available to generate dataset distribution chart with current filters.", icon="ℹ️")
+
+
+@st.fragment
+def render_dataset_details_card(unique_datasets):
+    """Render dataset details card"""
+    st.header("🗂️ Dataset Details")
+    dataset_id = st.selectbox("Select datasets to view details:", options=unique_datasets, key="massive_dataset_selection")
+
+    
+    if dataset_id:
+        display_metabolomics_metadata(dataset_id)
+    else:
+        st.info("No datasets available to display.", icon="ℹ️")
 
 # Sidebar for inputs
+# Load query parameters from URL (only on first load)
+if '_query_params_loaded' not in st.session_state:
+    st.session_state._url_params = load_all_params()
+    st.session_state._query_params_loaded = True
+else:
+    st.session_state._url_params = st.session_state.get('_url_params', {})
+
+url_params = st.session_state._url_params
+
 with st.sidebar:
     st.header("📁 Data Input")
 
+    # Determine initial example state from URL params
+    initial_example = url_params.get('example')
+    
     # Example data option
     use_example = st.checkbox("Load example data", 
-                              value=False, 
+                              value=initial_example is not None, 
                               help="Use built-in example files instead of uploading your own", 
                               key='use_example'
                               )
 
     if use_example:
+
+        def clean_example_data():
+            st.session_state.pop("results", None)
+            st.session_state.pop("df_merged", None)
+
+        # Set initial selection based on URL param
+        example_options = ["Example Set 1", "Example Set 2"]
+        if initial_example == '2':
+            initial_example_idx = 1
+        else:
+            initial_example_idx = 0
+            
         selected_example = st.selectbox(
             "Select example dataset:",
-            options=['Example Set 1', 'Example Set 2'],
+            options=example_options,
+            index=initial_example_idx,
             help="Choose which example dataset to load",
-            on_change=lambda: st.session_state.pop('results', None)
+            on_change=clean_example_data,
         )
-        if selected_example == 'Example Set 1':
+        if selected_example == "Example Set 1":
             data = pd.DataFrame(EXAMPLE_SET_1)
+            # Sync example selection to URL
+            sync_param('example', '1')
         elif selected_example == 'Example Set 2':
             data = pd.DataFrame(EXAMPLE_SET_2)
+            sync_param('example', '2')
     else:
-        data = None
+        # Load USI data from URL params if available
+        data = url_params.get('usi')
+        # Clear example from URL when not using example
+        if 'example' in st.query_params:
+            del st.query_params['example']
 
-    usi_data = create_usi_input(usi_data=data)
-    masst_query_params = create_masst_sidebar()
+    usi_data = create_usi_input(usi_data=data, sync_url=not use_example)
+    masst_query_params = create_masst_sidebar(initial_params=url_params)
     # Filter out empty rows
     query_df = usi_data[usi_data['usi'].str.strip() != ''].copy()
 
     st.session_state.masst_query_params = masst_query_params
-    
+
     # Change button label and behavior based on example mode
     if use_example:
         button_label = "Load Example Data"
@@ -477,7 +790,7 @@ with st.sidebar:
     else:
         button_label = "Run MASST Query"
         button_icon = "🔎"
-    
+
     st.session_state['run_masst_query'] = st.button(
         button_label, 
         icon=button_icon, 
@@ -489,8 +802,10 @@ with st.sidebar:
     if st.button("Run new query", type="secondary", icon=":material/replay:",use_container_width=True):
         st.session_state.clear()
         st.session_state["use_example"] = False
+        # Clear URL query parameters
+        clear_all_params()
         st.rerun()
-        
+
     st.markdown(f"**ReDU metadata last updated:** {file_date}")
 
     st.subheader("Contributors")
@@ -510,6 +825,10 @@ with st.sidebar:
         - [MASST Documentation](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/masst/)
         - [Fast Search Page](https://fasst.gnps2.org/fastsearch/)
         """)
+
+    with st.expander("API Reference"):
+        st.markdown("**Parameter Schema**")
+        st.json(get_param_schema())
 
 
 if st.session_state.get('run_masst_query', False):
@@ -548,12 +867,24 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
             # available_organisms = df_merged['NCBITaxonomy'].dropna().unique()
 
+            # Get initial organism from URL params
+            initial_organism = url_params.get('organism', get_default('organism'))
+            organism_options = ['Humans', 'Rodents', 'All organisms', "Manual Entry"]
+            if initial_organism in organism_options:
+                initial_org_idx = organism_options.index(initial_organism)
+            else:
+                initial_org_idx = 0  # Default to Humans
+
             organism_choice = st.selectbox(
                 "Select organism:",
-                options=['Humans', 'Rodents', 'All organisms', "Manual Entry"],
+                options=organism_options,
+                index=initial_org_idx,
                 help="Filter data by organism type",
                 key='organism_choice'
             )
+            
+            # Sync organism to URL
+            sync_param('organism', organism_choice)
 
             if organism_choice == "Manual Entry":
                 organism_choice = st.multiselect(
@@ -637,22 +968,62 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
 
 
         with col2:
-            create_heatmap_section(df_filtered, df_redu_filtered, analysis_column)
+            # Determine if single or multiple USI query
+            num_compounds = df_filtered['Compound'].nunique()
+            
+            if num_compounds == 1:
+                # Single USI - show bar chart
+                compound_name = df_filtered['Compound'].iloc[0]
+                create_bar_chart_section(df_filtered, df_redu_filtered, analysis_column, compound_name)
+            else:
+                # Multiple USIs - show heatmap
+                create_heatmap_section(df_filtered, df_redu_filtered, analysis_column)
 
         # Data preview
         st.header(":mag: Data Preview")
-        st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
-        st.dataframe(df_filtered.head(100))
+        preview_col, datasets_fig_col = st.columns([1, 1])
+        with datasets_fig_col:
+            # Datasets distribution plot
+            st.subheader("Datasets Distribution", help="Distribution of spectral matches across datasets")
+            render_datasets_distribution(df_filtered, analysis_column, unique_options)
+        with preview_col:
+            st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
+            
+            # Create a copy with Mirror Plot link as second column
+            df_display = df_filtered.head(100).copy()
+            df_display['Mirror Plot'] = df_display.apply(
+                lambda row: f"https://metabolomics-usi.gnps2.org/dashinterface/?usi1={urllib.parse.quote(row['query_usi'], safe='')}&usi2={urllib.parse.quote(row['USI'], safe='')}",
+                axis=1
+            )
+            # Reorder columns to put Mirror Plot as second column
+            cols = df_display.columns.tolist()
+            cols.remove('Mirror Plot')
+            cols.insert(1, 'Mirror Plot')
+            df_display = df_display[cols]
+            
+            st.dataframe(
+                df_display,
+                column_config={
+                    "Mirror Plot": st.column_config.LinkColumn(
+                        "Mirror Plot",
+                        help="Click to view mirror plot comparison",
+                        display_text="View"
+                    )
+                }
+            )
 
-        # Download full dataset
-        csv_full = df_filtered.to_csv(index=False)
-        st.download_button(
-            label="📥 Download full merged dataset",
-            data=csv_full,
-            file_name=f"merged_dataset.csv",
-            mime="text/csv",
-            disabled= not len(df_filtered) > 0,
-        )
+            # Download full dataset
+            csv_full = df_filtered.to_csv(index=False)
+            st.download_button(
+                label="📥 Download full merged dataset",
+                data=csv_full,
+                file_name=f"merged_dataset.csv",
+                mime="text/csv",
+                disabled= not len(df_filtered) > 0,
+            )
+        
+        unique_datasets = df_filtered['Dataset'].unique().tolist()
+        render_dataset_details_card(unique_datasets)
 
     except Exception as e:
         st.error(f"❌ Error processing data: {str(e)}")
