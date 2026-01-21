@@ -6,6 +6,7 @@ import scipy.spatial.distance as ssd
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap
 import io
+import urllib.parse
 from streamlit.components.v1 import html
 from welcome import welcome_page
 from download_redu import load_redu
@@ -987,7 +988,29 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
             render_datasets_distribution(df_filtered, analysis_column, unique_options)
         with preview_col:
             st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
-            st.dataframe(df_filtered.head(100))
+            
+            # Create a copy with Mirror Plot link as second column
+            df_display = df_filtered.head(100).copy()
+            df_display['Mirror Plot'] = df_display.apply(
+                lambda row: f"https://metabolomics-usi.gnps2.org/dashinterface/?usi1={urllib.parse.quote(row['query_usi'], safe='')}&usi2={urllib.parse.quote(row['USI'], safe='')}",
+                axis=1
+            )
+            # Reorder columns to put Mirror Plot as second column
+            cols = df_display.columns.tolist()
+            cols.remove('Mirror Plot')
+            cols.insert(1, 'Mirror Plot')
+            df_display = df_display[cols]
+            
+            st.dataframe(
+                df_display,
+                column_config={
+                    "Mirror Plot": st.column_config.LinkColumn(
+                        "Mirror Plot",
+                        help="Click to view mirror plot comparison",
+                        display_text="View"
+                    )
+                }
+            )
 
             # Download full dataset
             csv_full = df_filtered.to_csv(index=False)
