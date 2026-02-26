@@ -811,10 +811,10 @@ with st.sidebar:
     st.subheader("Contributors")
     st.markdown(
         """
-    - [Vincent Lamoureux PhD](https://scholar.google.com/citations?user=_OboZ0YAAAAJ) - UC San Diego
-    - [Helena Russo PhD](https://sites.google.com/view/helenamrusso/home) - UC San Diego
-    - [Prajit Rajkumar](https://scholar.google.com/citations?user=_iKPhb0AAAAJ) - UC San Diego
     - [Wilhan Nunes PhD](https://scholar.google.com/citations?user=4cPVoeIAAAAJ) - UC San Diego
+    - [Helena Russo PhD](https://sites.google.com/view/helenamrusso/home) - UC San Diego
+    - [Vincent Lamoureux PhD](https://scholar.google.com/citations?user=_OboZ0YAAAAJ) - UC San Diego
+    - [Prajit Rajkumar](https://scholar.google.com/citations?user=_iKPhb0AAAAJ) - UC San Diego
     - [Mingxun Wang PhD](https://www.cs.ucr.edu/~mingxunw/) - UC Riverside
     """
     )
