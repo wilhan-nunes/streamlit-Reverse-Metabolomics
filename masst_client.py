@@ -6,7 +6,7 @@ from tqdm import tqdm
 from gnpsdata import fasst
 #requests_cache.install_cache('demo_cache')
 
-def masst_query_all(query_df, database, masst_type, analog=False, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
+def masst_query_all(query_df, database, masst_type, analog=False, lower_delta=130, upper_delta=200, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
     output_results_list = []
 
     for query_element in tqdm(query_df.to_dict(orient="records")):
@@ -14,8 +14,9 @@ def masst_query_all(query_df, database, masst_type, analog=False, precursor_mz_t
 
             usi = query_element["usi"]
 
-            results_dict = fasst.query_fasst_api_usi(usi, database,
-                analog=analog, precursor_mz_tol=precursor_mz_tol, 
+            results_dict = fasst.query_fasst_usi(usi, database,
+                analog=analog, lower_delta=lower_delta, upper_delta=upper_delta,
+                precursor_mz_tol=precursor_mz_tol, 
                 fragment_mz_tol=fragment_mz_tol, min_cos=min_cos)
             results_df = pd.DataFrame(results_dict["results"])
 
@@ -39,6 +40,8 @@ def main():
     parser.add_argument('--masst_type', help='Type of MASST to give youresults: gnpsdata, microbemasst', default="masst")
     parser.add_argument('--database', help='Type database to actually search', default="gnpsdata_index")
     parser.add_argument('--analog', help='Perform Yes or No', default="No")
+    parser.add_argument('--lower_delta', help='Lower Precursor m/z Delta (Da) for analog search', default=130.0, type=float)
+    parser.add_argument('--upper_delta', help='Upper Precursor m/z Delta (Da) for analog search', default=200.0, type=float)
     parser.add_argument('--precursor_tolerance', help='precursor_tolerance', default=0.02, type=float)
     parser.add_argument('--fragment_tolerance', help='fragment_tolerance', default=0.02, type=float)
     parser.add_argument('--cosine', help='cosine', default=0.7, type=float)
@@ -52,6 +55,8 @@ def main():
     output_results_df = masst_query_all(query_df, 
                                         args.database, args.masst_type, 
                                         analog=analog_boolean,
+                                        lower_delta=args.lower_delta,
+                                        upper_delta=args.upper_delta,
                                         precursor_mz_tol=args.precursor_tolerance,
                                         fragment_mz_tol=args.fragment_tolerance)
                                         

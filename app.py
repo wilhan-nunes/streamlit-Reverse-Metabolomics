@@ -102,8 +102,8 @@ def create_colormap():
 cmap_wbr = create_colormap()
 
 @st.cache_data
-def cached_masst_results(query_df, database, masst_type, analog, precursor_mz_tol, fragment_mz_tol, min_cos):
-    return masst_query_all(query_df, database, masst_type, analog, precursor_mz_tol, fragment_mz_tol, min_cos)
+def cached_masst_results(query_df, database, masst_type, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos):
+    return masst_query_all(query_df, database, masst_type, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos)
 
 
 def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
@@ -615,7 +615,7 @@ def render_datasets_distribution(df_filtered, analisys_col, unique_organs):
             compounds.insert(0, "All compounds")
             compound_selection = st.selectbox("Select compound", compounds, key="dataset_distribution_compound")
         with col2:
-            unique_options = df_filtered[analisys_col].unique().tolist()
+            unique_options = df_filtered[analisys_col].dropna().unique().tolist()
             unique_options.sort()
             unique_options.insert(0, "All")
             strata_selection = st.selectbox("Stratify by", unique_options, key="stratify_by")

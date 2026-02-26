@@ -200,6 +200,22 @@ ANALOG_PARAM = register_param(QueryParam(
     description="Enable analog search",
 ))
 
+LOWER_DELTA_PARAM = register_param(QueryParam(
+    key="lower_delta",
+    default=130,
+    param_type=ParamType.FLOAT,
+    description="Lower delta m/z for analog search (Da)",
+    validator=lambda v: 0 <= v <= 1000,
+))
+
+UPPER_DELTA_PARAM = register_param(QueryParam(
+    key="upper_delta",
+    default=200,
+    param_type=ParamType.FLOAT,
+    description="Upper delta m/z for analog search (Da)",
+    validator=lambda v: 0 <= v <= 1000,
+))
+
 PRECURSOR_TOL_PARAM = register_param(QueryParam(
     key="precursor_tol",
     default=0.02,
