@@ -936,7 +936,8 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
             unique_options = list(df_filtered[analysis_column].unique())
             variable_to_exclude = st.multiselect("Exclude from analysis (optional)", options=unique_options)
         if len(df_filtered) == 0:
-            st.warning(f"No data available for the selected organism filter: {', '.join(organism_choice)}. "
+            selection_str = ", ".join(organism_choice) if isinstance(organism_choice, list) else organism_choice
+            st.warning(f"No data available for the selected organism filter: {selection_str}. "
                        f"Try selecting 'All organisms' or a different filter.", icon="⚠️")
         else:
             if isinstance(organism_choice, list):
@@ -989,41 +990,44 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
         with preview_col:
             st.subheader("Merged Dataset", help="Showing first 100 rows of the merged dataset")
             
-            # Create a copy with Mirror Plot link as second column
-            df_display = df_filtered.head(100).copy()
-            df_display['Mirror Plot'] = df_display.apply(
-                lambda row: f"https://metabolomics-usi.gnps2.org/dashinterface/?usi1={urllib.parse.quote(row['query_usi'], safe='')}&usi2={urllib.parse.quote(row['USI'], safe='')}",
-                axis=1
-            )
-            # Reorder columns to put Mirror Plot as second column
-            cols = df_display.columns.tolist()
-            cols.remove('Mirror Plot')
-            cols.insert(1, 'Mirror Plot')
-            df_display = df_display[cols]
-            
-            st.dataframe(
-                df_display,
-                column_config={
-                    "Mirror Plot": st.column_config.LinkColumn(
-                        "Mirror Plot",
-                        help="Click to view mirror plot comparison",
-                        display_text="View"
-                    )
-                }
-            )
+            if len(df_filtered) == 0:
+                st.warning("No data available to display.")
+            else:
+                # Create a copy with Mirror Plot link as second column
+                df_display = df_filtered.head(100).copy()
+                df_display['Mirror Plot'] = df_display.apply(
+                    lambda row: f"https://metabolomics-usi.gnps2.org/dashinterface/?usi1={urllib.parse.quote(row['query_usi'], safe='')}&usi2={urllib.parse.quote(row['USI'], safe='')}",
+                    axis=1
+                )
+                # Reorder columns to put Mirror Plot as second column
+                cols = df_display.columns.tolist()
+                cols.remove('Mirror Plot')
+                cols.insert(1, 'Mirror Plot')
+                df_display = df_display[cols]
+                
+                st.dataframe(
+                    df_display,
+                    column_config={
+                        "Mirror Plot": st.column_config.LinkColumn(
+                            "Mirror Plot",
+                            help="Click to view mirror plot comparison",
+                            display_text="View"
+                        )
+                    }
+                )
 
-            # Download full dataset
-            csv_full = df_filtered.to_csv(index=False)
-            st.download_button(
-                label="📥 Download full merged dataset",
-                data=csv_full,
-                file_name=f"merged_dataset.csv",
-                mime="text/csv",
-                disabled= not len(df_filtered) > 0,
-            )
-        
-        unique_datasets = df_filtered['Dataset'].unique().tolist()
-        render_dataset_details_card(unique_datasets)
+                # Download full dataset
+                csv_full = df_filtered.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download full merged dataset",
+                    data=csv_full,
+                    file_name=f"merged_dataset.csv",
+                    mime="text/csv",
+                    disabled= not len(df_filtered) > 0,
+                )
+            
+            unique_datasets = df_filtered['Dataset'].unique().tolist()
+            render_dataset_details_card(unique_datasets)
 
     except Exception as e:
         st.error(f"❌ Error processing data: {str(e)}")
