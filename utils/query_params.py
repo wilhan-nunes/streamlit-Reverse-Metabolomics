@@ -188,7 +188,7 @@ EXAMPLE_PARAM = register_param(QueryParam(
 
 DATABASE_PARAM = register_param(QueryParam(
     key="database",
-    default="metabolomicspanrepo_index_latest",
+    default="metabolomicspanrepo_index_nightly",
     param_type=ParamType.STRING,
     description="MASST database to search",
 ))
