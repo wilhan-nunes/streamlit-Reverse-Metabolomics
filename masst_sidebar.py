@@ -165,7 +165,6 @@ def create_masst_sidebar(disabled: bool = False, initial_params: dict = None) ->
 
         return {
             'database': database,
-            'masst_type': "masst",
             'analog': analog == "Yes",
             'lower_delta': lower_delta if st.session_state.masst_analog == "Yes" else None,
             'upper_delta': upper_delta if st.session_state.masst_analog == "Yes" else None,
