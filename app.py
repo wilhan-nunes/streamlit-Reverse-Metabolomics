@@ -1,3 +1,6 @@
+from pathlib import Path
+import re
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -102,8 +105,8 @@ def create_colormap():
 cmap_wbr = create_colormap()
 
 @st.cache_data
-def cached_masst_results(query_df, database, masst_type, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos):
-    return masst_query_all(query_df, database, masst_type, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos)
+def cached_masst_results(query_df, database, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos):
+    return masst_query_all(query_df, database, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos)
 
 
 def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
@@ -123,10 +126,9 @@ def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFram
     df_combined['Compound'] = df_combined['query_usi'].apply(lambda x: usi_to_name.get(x, 'Unknown'))
 
     # Create filepath column
-    usi_parts = df_combined['USI'].str.rsplit('/', n=1).str[-1].str.split(':', n=1).str[0]
-    df_combined['filepath'] = df_combined['Dataset'] + "/" + usi_parts.str.replace(
-        r'\.mz(ML|XML)$', '', regex=True
-    )
+    df_combined['filepath'] = df_combined['Dataset'] + "/" + df_combined['USI'].apply(
+    lambda x: Path(x.split(':')[2]).stem
+)
 
     # Merge datasets (df_redu is already processed)
     df_merged = pd.merge(df_combined, df_redu, left_on='filepath', right_on='filepath', how='left',
@@ -916,8 +918,8 @@ if "results" in st.session_state and len(st.session_state.results) > 0:
         rename_dict = {"UBERONBodyPartName": "Body Part",
                        "DOIDCommonName": "Disease"
                        }
-        df_filtered.rename(columns=rename_dict, inplace=True)
-        df_redu_filtered.rename(columns=rename_dict, inplace=True)
+        df_filtered = df_filtered.rename(columns=rename_dict).copy()
+        df_redu_filtered = df_redu_filtered.rename(columns=rename_dict).copy()
 
         with col2:
             # Analysis options
