@@ -13,8 +13,6 @@ URL = "https://fasst.gnps2.org/search"
 def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_delta=200, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
     output_results_list = []
 
-    min_signals = 4
-
     for query_element in tqdm(query_df.to_dict(orient="records")):
         try:
             print(query_element)
@@ -43,8 +41,6 @@ def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_del
 
             spec_dict["peaks"] = dps
             spec_dict["n_peaks"] = len(dps)
-            if spec_dict["n_peaks"] < min_signals:
-                return None, dps
     
             spec_json = json.dumps(spec_dict)
     
