@@ -93,6 +93,25 @@ def create_masst_sidebar(disabled: bool = False, initial_params: dict = None) ->
                 key='masst_analog'
             )
 
+            if st.session_state.masst_analog == "Yes":
+                upper_delta = st.number_input(
+                    "Upper Precursor m/z Delta (Da)",
+                    help="Mass difference range for analog search (e.g. 200 Da)",
+                    min_value=0.001,
+                    max_value=1000.0,
+                    value=200.0,
+                    step=0.1,
+                    key='masst_upper_delta')
+                lower_delta = st.number_input(
+                    "Lower Precursor m/z Delta (Da)",
+                    help="Mass difference range for analog search (e.g. -20 Da)",
+                    min_value=0.001,
+                    max_value=1000.0,
+                    value=100.0,
+                    step=0.1,
+                    key='masst_lower_delta')
+                st.markdown(f"**Analog Search Range:** -{lower_delta} Da to +{upper_delta} Da")
+
             # Tolerance parameters
             st.subheader("Tolerance Parameters")
 
@@ -138,14 +157,17 @@ def create_masst_sidebar(disabled: bool = False, initial_params: dict = None) ->
         # Sync parameters to URL in real-time
         sync_param('database', database)
         sync_param('analog', analog == "Yes")
+        sync_param('lower_delta', lower_delta if st.session_state.masst_analog == "Yes" else None)
+        sync_param('upper_delta', upper_delta if st.session_state.masst_analog == "Yes" else None)
         sync_param('precursor_tol', precursor_tolerance)
         sync_param('fragment_tol', fragment_tolerance)
         sync_param('min_cos', cosine_threshold)
 
         return {
             'database': database,
-            'masst_type': "masst",
             'analog': analog == "Yes",
+            'lower_delta': lower_delta if st.session_state.masst_analog == "Yes" else None,
+            'upper_delta': upper_delta if st.session_state.masst_analog == "Yes" else None,
             'precursor_mz_tol': precursor_tolerance,
             'fragment_mz_tol': fragment_tolerance,
             'min_cos': cosine_threshold

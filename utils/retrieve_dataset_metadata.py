@@ -406,5 +406,5 @@ def display_metabolomics_metadata(dataset_id: str) -> None:
     except KeyError as e:
         st.error(f"Error parsing data - missing expected field: {str(e)}")
     except Exception as e:
-        raise
         st.error(f"Error processing data: {str(e)}")
+        raise

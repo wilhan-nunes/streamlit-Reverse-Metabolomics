@@ -188,7 +188,7 @@ EXAMPLE_PARAM = register_param(QueryParam(
 
 DATABASE_PARAM = register_param(QueryParam(
     key="database",
-    default="metabolomicspanrepo_index_latest",
+    default="metabolomicspanrepo_index_nightly",
     param_type=ParamType.STRING,
     description="MASST database to search",
 ))
@@ -198,6 +198,22 @@ ANALOG_PARAM = register_param(QueryParam(
     default=False,
     param_type=ParamType.BOOLEAN,
     description="Enable analog search",
+))
+
+LOWER_DELTA_PARAM = register_param(QueryParam(
+    key="lower_delta",
+    default=130,
+    param_type=ParamType.FLOAT,
+    description="Lower delta m/z for analog search (Da)",
+    validator=lambda v: 0 <= v <= 1000,
+))
+
+UPPER_DELTA_PARAM = register_param(QueryParam(
+    key="upper_delta",
+    default=200,
+    param_type=ParamType.FLOAT,
+    description="Upper delta m/z for analog search (Da)",
+    validator=lambda v: 0 <= v <= 1000,
 ))
 
 PRECURSOR_TOL_PARAM = register_param(QueryParam(
