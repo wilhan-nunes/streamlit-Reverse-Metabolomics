@@ -107,7 +107,7 @@ def create_masst_sidebar(disabled: bool = False, initial_params: dict = None) ->
                     help="Mass difference range for analog search (e.g. -20 Da)",
                     min_value=0.001,
                     max_value=1000.0,
-                    value=130.0,
+                    value=100.0,
                     step=0.1,
                     key='masst_lower_delta')
                 st.markdown(f"**Analog Search Range:** -{lower_delta} Da to +{upper_delta} Da")
