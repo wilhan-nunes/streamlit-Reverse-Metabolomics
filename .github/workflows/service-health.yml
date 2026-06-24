@@ -1,0 +1,29 @@
+name: Service Health
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # daily at 08:00 UTC
+  push:
+    paths:
+      - "utils/retrieve_dataset_metadata.py"
+      - "masst_client.py"
+      - "tests/test_services.py"
+  workflow_dispatch:       # allow manual runs from the Actions tab
+
+jobs:
+  test:
+    name: Check external services
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests pytest
+
+      - name: Run service health tests
+        run: pytest tests/test_services.py -v
