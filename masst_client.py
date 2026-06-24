@@ -1,14 +1,27 @@
 import json
+import time
+import logging
 
 import pandas as pd
 import argparse
 import requests
 import requests_cache
 from tqdm import tqdm
-from gnpsdata import fasst
-#requests_cache.install_cache('demo_cache')
 
-URL = "https://fasst.gnps2.org/search"
+HOST = "https://api.fasst.gnps2.org"
+
+
+def _blocking_for_results(task_id: str, host: str = HOST, retries_max: int = 120) -> dict:
+    for _ in range(retries_max):
+        r = requests.get(f"{host}/search/result/{task_id}", timeout=30)
+        r.raise_for_status()
+        payload = r.json()
+        if isinstance(payload, dict) and payload.get("status") == "PENDING":
+            time.sleep(1)
+            continue
+        return payload
+    raise TimeoutError("Timeout waiting for results from FASST API")
+
 
 def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_delta=200, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
     output_results_list = []
@@ -18,46 +31,22 @@ def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_del
             print(query_element)
             usi = query_element["usi"]
 
-            #retrieve usi json from metabolomics resolver API
-            usi_json = requests.get(f"https://metabolomics-usi.gnps2.org/json/?usi1={usi}").json()
-            # modify precursor_charge value to be an absolute value (since some usis have negative charge values)
-            usi_json["precursor_charge"] = abs(usi_json["precursor_charge"])
-            # spec_json = json.dumps(usi_json)
-    
-            dps = [[round(mz, 5), intensity] for mz, intensity in usi_json["peaks"]]
-            spec_dict = {
-                "n_peaks": len(dps),
-                "peaks": dps,
-                "precursor_mz": usi_json["precursor_mz"],
-                "precursor_charge": abs(usi_json["precursor_charge"]),
+            params = {
+                "library": str(database),
+                "usi": usi,
+                "analog": "Yes" if analog else "No",
+                "lower_delta": lower_delta,
+                "upper_delta": upper_delta,
+                "pm_tolerance": precursor_mz_tol,
+                "fragment_tolerance": fragment_mz_tol,
+                "cosine_threshold": min_cos,
             }
 
-            max_intensity = max([v[1] for v in spec_dict["peaks"]])
-            dps = [
-                [round(dp[0], 5), round(dp[1] / max_intensity * 100.0, 1)]
-                for dp in spec_dict["peaks"]
-            ]
-            dps = [dp for dp in dps if dp[1] >= 0.1]
-
-            spec_dict["peaks"] = dps
-            spec_dict["n_peaks"] = len(dps)
-    
-            spec_json = json.dumps(spec_dict)
-    
-            params = {
-            "library": str(database),
-            "analog": "Yes" if analog else "No",
-            "delta_mass_below": lower_delta,
-            "delta_mass_above": upper_delta,
-            "pm_tolerance": precursor_mz_tol,
-            "fragment_tolerance": fragment_mz_tol,
-            "cosine_threshold": min_cos,
-            "query_spectrum": spec_json,
-        }
-
-            search_api_response = requests.post(URL, data=params, timeout=300)
+            search_api_response = requests.post(f"{HOST}/search", json=params, timeout=30)
             search_api_response.raise_for_status()
-            search_api_response_json = search_api_response.json()
+            task_id = search_api_response.json()["id"]
+
+            search_api_response_json = _blocking_for_results(task_id)
 
             results_df = pd.DataFrame(search_api_response_json['results'])
 

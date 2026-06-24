@@ -40,7 +40,7 @@ def detect_repository(dataset_id: str) -> Optional[DataRepository]:
 
 def fetch_massive_metadata(msv_id: str) -> Dict[str, Any]:
     """Fetch metadata from MassIVE repository"""
-    url = f"http://massive.ucsd.edu/ProteoSAFe/proxi/v0.1/datasets/{msv_id}"
+    url = f"https://massive.ucsd.edu/ProteoSAFe/proxi/v0.1/datasets/{msv_id}"
     response = requests.get(url, timeout=10)
     response.raise_for_status()
     return response.json()
