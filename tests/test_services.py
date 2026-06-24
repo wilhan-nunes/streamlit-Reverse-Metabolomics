@@ -2,7 +2,7 @@
 Integration tests for external service endpoints.
 
 Run with:  pytest tests/test_services.py -v
-These make real HTTP requests — they detect outages and API changes.
+These make real HTTP requests to detect outages and API changes.
 """
 
 import pytest
@@ -103,9 +103,48 @@ class TestWorkbenchService:
 
 
 # ---------------------------------------------------------------------------
-# FASST / GNPS2
+#  ReDU metadata dump / FASST / GNPS2
 # ---------------------------------------------------------------------------
 
+REDU_EXPECTED_COLUMNS = {
+    "filename",
+    "ATTRIBUTE_DatasetAccession",
+    "NCBITaxonomy",
+    "UBERONBodyPartName",
+    "DOIDCommonName",
+    "BiologicalSex",
+    "AgeInYears",
+}
+
+class TestReDUService:
+    URL = "https://redu.gnps2.org/dump"
+
+    def test_endpoint_reachable(self):
+        with requests.get(self.URL, stream=True, timeout=TIMEOUT) as r:
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+
+    def test_response_is_nonempty(self):
+        with requests.get(self.URL, stream=True, timeout=TIMEOUT) as r:
+            first_chunk = next(r.iter_content(chunk_size=1024), b"")
+        assert len(first_chunk) > 0, "Response body is empty"
+
+    def test_header_row_has_expected_columns(self):
+        """Read only the first line to check TSV columns without downloading the full file."""
+        with requests.get(self.URL, stream=True, timeout=TIMEOUT) as r:
+            r.raise_for_status()
+            first_line = b""
+            for chunk in r.iter_content(chunk_size=4096):
+                first_line += chunk
+                if b"\n" in first_line:
+                    break
+
+        header_line = first_line.split(b"\n")[0].decode("utf-8")
+        columns = set(header_line.strip().split("\t"))
+        missing = REDU_EXPECTED_COLUMNS - columns
+        assert not missing, f"Missing expected columns: {missing}"
+
+
+# ---------------------------------------------------------------------------
 class TestFASSTService:
 
     def test_search_endpoint_accepts_job(self):
