@@ -96,10 +96,11 @@ with st.spinner("Loading ReDU metadata (first run downloads it, which takes a fe
     df_redu, file_date = load_redu_data()
 
 if df_redu is None:
-    st.error(
-        "Could not load the ReDU metadata file, which this tool needs to run.\n\n"
-        f"{manual_download_hint(get_redu_path())}"
+    st.warning(
+        "We couldn't download the ReDU metadata file automatically — no "
+        "problem, just grab it manually with these steps:"
     )
+    st.markdown(manual_download_hint(get_redu_path()))
     st.stop()
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")

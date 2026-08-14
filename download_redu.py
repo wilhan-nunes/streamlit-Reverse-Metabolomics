@@ -165,20 +165,25 @@ def get_redu_path() -> Path:
 
 
 def manual_download_hint(file_path) -> str:
-    """Instructions for users whose automatic download failed.
+    """Friendly, step-by-step instructions for users whose automatic download failed.
 
     Paths are wrapped in backticks: this string is rendered as Markdown
-    (e.g. via st.error), which otherwise treats a bare backslash before
+    (e.g. via st.markdown), which otherwise treats a bare backslash before
     punctuation as an escape and silently drops it — corrupting Windows
     paths like "C:\\Users\\name\\.reverse-metabolomics".
     """
     file_path = Path(file_path)
     return (
-        f"Download https://redu.gnps2.org/dump manually, rename the downloaded "
-        f"file to `{RAW_REDU_FILENAME}`, and place it in `{file_path.parent}` — "
-        f"the app will detect and convert it automatically next time it loads. "
-        f"Alternatively, convert it to parquet yourself and save it to "
-        f"`{file_path}`, or point REDU_METADATA_PATH at an existing parquet file."
+        f"1. Open **[redu.gnps2.org/dump](https://redu.gnps2.org/dump)** in your "
+        f"browser and let it download (this is a large file, so it may take a "
+        f"few minutes).\n"
+        f"2. Rename the downloaded file to `{RAW_REDU_FILENAME}`.\n"
+        f"3. Move that file into this folder: `{file_path.parent}`\n"
+        f"4. Reload this page — the app will find it and convert it "
+        f"automatically. ✅\n\n"
+        f"*Prefer to skip the automatic conversion?* Convert the file to "
+        f"parquet yourself, save it as `{file_path}`, or point the "
+        f"`REDU_METADATA_PATH` environment variable at an existing parquet file."
     )
 
 
