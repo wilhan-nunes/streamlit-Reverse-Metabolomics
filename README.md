@@ -81,6 +81,10 @@ If you use this tool, please cite:
 > reverse metabolomics—a framework for big data discovery strategy. *Nat
 > Protoc* (2025). https://doi.org/10.1038/s41596-024-01136-2
 
+> Mannochio-Russo, H., Gonçalves Nunes, W.D., Zhao, H.N. et al. Bridging
+> complexity and accessibility in metabolomics with MetaboApps. *Nat
+> Methods* 23, 1475–1477 (2026). https://doi.org/10.1038/s41592-026-03186-8
+
 This application is part of the GNPS downstream analysis ecosystem known as
 **MetaboApps**. See the
 [full tool index](https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/toolindex/#gnps2-web-tools)
