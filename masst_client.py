@@ -5,10 +5,12 @@ import logging
 import pandas as pd
 import argparse
 import requests
-import requests_cache
 from tqdm import tqdm
 
 HOST = "https://api.fasst.gnps2.org"
+
+
+IN_FLIGHT_STATUSES = {"PENDING", "RUNNING", "STARTED", "RETRY"}
 
 
 def _blocking_for_results(task_id: str, host: str = HOST, retries_max: int = 120) -> dict:
@@ -16,9 +18,11 @@ def _blocking_for_results(task_id: str, host: str = HOST, retries_max: int = 120
         r = requests.get(f"{host}/search/result/{task_id}", timeout=30)
         r.raise_for_status()
         payload = r.json()
-        if isinstance(payload, dict) and payload.get("status") == "PENDING":
+        if isinstance(payload, dict) and payload.get("status") in IN_FLIGHT_STATUSES:
             time.sleep(1)
             continue
+        if isinstance(payload, dict) and "results" not in payload:
+            raise ValueError(f"Unexpected finished payload without 'results' key: {payload}")
         return payload
     raise TimeoutError("Timeout waiting for results from FASST API")
 
