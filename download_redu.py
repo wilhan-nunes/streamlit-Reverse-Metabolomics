@@ -15,6 +15,60 @@ logging.basicConfig(
 )
 
 
+def convert_tsv_to_parquet(tsv_path, output_path) -> bool:
+    """
+    Convert an already-downloaded raw ReDU TSV dump to parquet.
+
+    Args:
+        tsv_path: Path to the raw TSV file (e.g. a manually downloaded
+            https://redu.gnps2.org/dump dropped in place by the user).
+        output_path: Path where the converted parquet file should be written.
+
+    Returns:
+        bool: True on success, False on failure.
+    """
+    tsv_path = Path(tsv_path)
+    output_path = Path(output_path)
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Converting {tsv_path} to parquet format...")
+        df = pd.read_csv(tsv_path, sep="\t", low_memory=False)
+        df.to_parquet(output_path, index=False)
+        print(f"Conversion completed successfully: {output_path}")
+        return True
+    except Exception as e:
+        print(f"Error converting {tsv_path} to parquet: {e}")
+        return False
+
+
+def find_raw_redu_file(output_path):
+    """
+    Look for a manually-downloaded raw ReDU dump sitting next to output_path.
+
+    Users following the manual-download instructions may just drag the raw
+    file from https://redu.gnps2.org/dump into the expected data directory
+    without renaming or converting it. Check a few likely names/extensions.
+
+    Args:
+        output_path: The expected final parquet path.
+
+    Returns:
+        Path to the raw file if found, else None.
+    """
+    output_path = Path(output_path)
+    candidates = [
+        output_path.parent / "dump",
+        output_path.parent / "dump.tsv",
+        output_path.with_suffix(".tsv"),
+        output_path.with_suffix(".txt"),
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
 def download_redu_metadata(output_path):
     """
     Download ReDU metadata file from GNPS2 using streaming and save as parquet.
@@ -72,12 +126,13 @@ def download_redu_metadata(output_path):
                     print()  # New line after download completes
 
         # Read TSV and convert to parquet
-        print("Converting to parquet format...")
-        df = pd.read_csv(temp_path, sep="\t", low_memory=False)
-        df.to_parquet(output_path, index=False)
+        success = convert_tsv_to_parquet(temp_path, output_path)
 
         # Clean up temporary TSV file
         temp_path.unlink()
+
+        if not success:
+            return False
 
         print(f"Download completed successfully: {output_path}")
         return True
@@ -116,9 +171,14 @@ def get_redu_path() -> Path:
 
 def manual_download_hint(file_path) -> str:
     """Instructions for users whose automatic download failed."""
+    file_path = Path(file_path)
     return (
-        f"Download https://redu.gnps2.org/dump manually, then either save the "
-        f"converted file to {file_path}, or point REDU_METADATA_PATH at it."
+        f"Download https://redu.gnps2.org/dump manually and drop the raw file "
+        f"(named 'dump', 'dump.tsv', or with a .tsv/.txt extension) into "
+        f"{file_path.parent} — the app will detect and convert it automatically "
+        f"next time it loads. Alternatively, convert it to parquet yourself and "
+        f"save it to {file_path}, or point REDU_METADATA_PATH at an existing "
+        f"parquet file."
     )
 
 
@@ -164,10 +224,17 @@ def load_redu(max_age_days=30, columns_to_load=None):
             else:
                 print("Re-download failed, continuing with the existing file.")
     else:
-        print(f"File does not exist, downloading to {file_path}...")
-        if not download_redu_metadata(file_path):
-            print(f"Download failed. {manual_download_hint(file_path)}")
-            return None, None
+        raw_file = find_raw_redu_file(file_path)
+        if raw_file:
+            print(f"Found manually downloaded file {raw_file}, converting...")
+            if not convert_tsv_to_parquet(raw_file, file_path):
+                print(f"Conversion failed. {manual_download_hint(file_path)}")
+                return None, None
+        else:
+            print(f"File does not exist, downloading to {file_path}...")
+            if not download_redu_metadata(file_path):
+                print(f"Download failed. {manual_download_hint(file_path)}")
+                return None, None
         mtime = os.path.getmtime(file_path)
 
     file_date = datetime.fromtimestamp(mtime)
