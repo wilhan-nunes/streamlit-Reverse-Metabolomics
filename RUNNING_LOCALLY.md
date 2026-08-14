@@ -65,17 +65,22 @@ If a refresh fails, the app keeps using the copy it already has.
 
 ### If the automatic download fails
 
-Download <https://redu.gnps2.org/dump> yourself, then point the app at it:
+Download <https://redu.gnps2.org/dump> yourself in a browser, rename the
+downloaded file to `redu.tsv`, and place it in the ReDU data directory
+(`~/.reverse-metabolomics` by default, or wherever `REVMET_DATA_DIR` points).
+The app detects it and converts it to Parquet automatically the next time it
+loads — no manual conversion needed.
 
-```bash
-REDU_METADATA_PATH=/path/to/your/file.parquet uv run run_local.py
-```
-
-Note that the dump is a TSV file; the app stores it as Parquet. To convert it:
+Alternatively, convert it to Parquet yourself and point the app at the
+result:
 
 ```python
 import pandas as pd
 pd.read_csv("dump.tsv", sep="\t", low_memory=False).to_parquet("REDU_metadata.parquet", index=False)
+```
+
+```bash
+REDU_METADATA_PATH=/path/to/your/REDU_metadata.parquet uv run run_local.py
 ```
 
 ## What differs from the hosted site
