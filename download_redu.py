@@ -42,13 +42,16 @@ def convert_tsv_to_parquet(tsv_path, output_path) -> bool:
         return False
 
 
+RAW_REDU_FILENAME = "redu.tsv"
+
+
 def find_raw_redu_file(output_path):
     """
     Look for a manually-downloaded raw ReDU dump sitting next to output_path.
 
-    Users following the manual-download instructions may just drag the raw
-    file from https://redu.gnps2.org/dump into the expected data directory
-    without renaming or converting it. Check a few likely names/extensions.
+    Per the manual-download instructions, users must rename the file
+    downloaded from https://redu.gnps2.org/dump to RAW_REDU_FILENAME and
+    place it in the same directory as the expected parquet file.
 
     Args:
         output_path: The expected final parquet path.
@@ -57,16 +60,8 @@ def find_raw_redu_file(output_path):
         Path to the raw file if found, else None.
     """
     output_path = Path(output_path)
-    candidates = [
-        output_path.parent / "dump",
-        output_path.parent / "dump.tsv",
-        output_path.with_suffix(".tsv"),
-        output_path.with_suffix(".txt"),
-    ]
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return candidate
-    return None
+    raw_path = output_path.parent / RAW_REDU_FILENAME
+    return raw_path if raw_path.is_file() else None
 
 
 def download_redu_metadata(output_path):
@@ -173,12 +168,11 @@ def manual_download_hint(file_path) -> str:
     """Instructions for users whose automatic download failed."""
     file_path = Path(file_path)
     return (
-        f"Download https://redu.gnps2.org/dump manually and drop the raw file "
-        f"(named 'dump', 'dump.tsv', or with a .tsv/.txt extension) into "
-        f"{file_path.parent} — the app will detect and convert it automatically "
-        f"next time it loads. Alternatively, convert it to parquet yourself and "
-        f"save it to {file_path}, or point REDU_METADATA_PATH at an existing "
-        f"parquet file."
+        f"Download https://redu.gnps2.org/dump manually, rename the downloaded "
+        f"file to '{RAW_REDU_FILENAME}', and place it in {file_path.parent} — "
+        f"the app will detect and convert it automatically next time it loads. "
+        f"Alternatively, convert it to parquet yourself and save it to "
+        f"{file_path}, or point REDU_METADATA_PATH at an existing parquet file."
     )
 
 
