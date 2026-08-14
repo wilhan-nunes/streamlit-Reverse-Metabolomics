@@ -34,13 +34,17 @@ def get_git_short_rev():
 
 @st.cache_data(ttl=2592000)  # Cache for 30 days
 def load_redu_data():
-    """Load ReDU metadata file and return as DataFrame"""
-    try:
-        df, file_date = load_redu(max_age_days=30) # if the file is older than 30 days it will be re-downloaded
-        return df, file_date
-    except Exception as e:
-        st.error(f"Error loading ReDU metadata: {str(e)}")
-        return None, None
+    """Load ReDU metadata file and return as DataFrame.
+
+    Raises on failure instead of returning (None, None): st.cache_data only
+    skips caching when the function raises, so a raised exception is what
+    lets a manually placed file get picked up on the next rerun instead of
+    requiring the user to clear the cache by hand.
+    """
+    df, file_date = load_redu(max_age_days=30) # if the file is older than 30 days it will be re-downloaded
+    if df is None:
+        raise RuntimeError("Failed to load ReDU metadata")
+    return df, file_date
 
 # Configure matplotlib for PDF output
 mpl.rcParams['pdf.fonttype'] = 42
@@ -93,7 +97,10 @@ st.set_page_config(
 
 # Load ReDU data directly from cache (shared across all users)
 with st.spinner("Loading ReDU metadata (first run downloads it, which takes a few minutes)..."):
-    df_redu, file_date = load_redu_data()
+    try:
+        df_redu, file_date = load_redu_data()
+    except Exception:
+        df_redu, file_date = None, None
 
 if df_redu is None:
     st.warning(
