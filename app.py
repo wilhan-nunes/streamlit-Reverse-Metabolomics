@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import re
 
 import streamlit as st
@@ -12,7 +13,7 @@ import io
 import urllib.parse
 from streamlit.components.v1 import html
 from welcome import welcome_page
-from download_redu import load_redu
+from download_redu import load_redu, get_redu_path, manual_download_hint
 import time
 from matplotlib import pyplot as plt
 
@@ -50,9 +51,12 @@ app_version = "2026-06-24"
 git_hash = get_git_short_rev()
 repo_link = "https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics"
 
-# Add a tracking token
-html('<script async defer data-website-id="74bc9983-13c4-4da0-89ae-b78209c13aaf" src="https://analytics.gnps2.org/umami.js"></script>', width=0, height=0)
-html('<script defer src="https://analytics-api.gnps2.org/script.js" data-website-id="74665d88-3b9d-4812-b8fc-7f55ceb08f11"></script>', width=0, height=0)
+# Add a tracking token. Skipped for local runs: a tool the user runs on their own
+# machine should not report usage to a third party, and it must work offline.
+IS_LOCAL = os.environ.get("REVMET_LOCAL") == "1"
+if not IS_LOCAL:
+    html('<script async defer data-website-id="74bc9983-13c4-4da0-89ae-b78209c13aaf" src="https://analytics.gnps2.org/umami.js"></script>', width=0, height=0)
+    html('<script defer src="https://analytics-api.gnps2.org/script.js" data-website-id="74665d88-3b9d-4812-b8fc-7f55ceb08f11"></script>', width=0, height=0)
 
 
 # Original paper example - https://doi.org/10.1038/s41596-024-01136-2
@@ -88,8 +92,15 @@ st.set_page_config(
 
 
 # Load ReDU data directly from cache (shared across all users)
-with st.spinner("Loading ReDU metadata..."):
+with st.spinner("Loading ReDU metadata (first run downloads it, which takes a few minutes)..."):
     df_redu, file_date = load_redu_data()
+
+if df_redu is None:
+    st.error(
+        "Could not load the ReDU metadata file, which this tool needs to run.\n\n"
+        f"{manual_download_hint(get_redu_path())}"
+    )
+    st.stop()
 
 st.title("🧬 Reverse Metabolomics Analysis Tool")
 

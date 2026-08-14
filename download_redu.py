@@ -96,6 +96,32 @@ def download_redu_metadata(output_path):
         return False
 
 
+def get_redu_path() -> Path:
+    """Resolve where the ReDU metadata file lives.
+
+    Server deployments get the historical default (the working directory).
+    Local runs set REVMET_DATA_DIR so the download persists outside the repo.
+    REDU_METADATA_PATH overrides both, for a manually downloaded file.
+    """
+    explicit = os.environ.get("REDU_METADATA_PATH")
+    if explicit:
+        return Path(explicit).expanduser()
+
+    data_dir = os.environ.get("REVMET_DATA_DIR")
+    if data_dir:
+        return Path(data_dir).expanduser() / "REDU_metadata.parquet"
+
+    return Path("REDU_metadata.parquet")
+
+
+def manual_download_hint(file_path) -> str:
+    """Instructions for users whose automatic download failed."""
+    return (
+        f"Download https://redu.gnps2.org/dump manually, then either save the "
+        f"converted file to {file_path}, or point REDU_METADATA_PATH at it."
+    )
+
+
 def load_redu(max_age_days=30, columns_to_load=None):
     """
     Load ReDU metadata file, checking if it exists and how old it is.
@@ -122,7 +148,7 @@ def load_redu(max_age_days=30, columns_to_load=None):
             "AgeInYears",
         ]
 
-    file_path = "REDU_metadata.parquet"
+    file_path = get_redu_path()
 
     if os.path.exists(file_path):
         # Get modification time (ctime on Linux is mtime)
@@ -132,11 +158,16 @@ def load_redu(max_age_days=30, columns_to_load=None):
 
         if age_days > max_age_days:
             print(f"File is {age_days:.1f} days old, re-downloading...")
-            download_redu_metadata(file_path)
-            mtime = os.path.getmtime(file_path)
+            # Keep serving the stale copy if the refresh fails.
+            if download_redu_metadata(file_path):
+                mtime = os.path.getmtime(file_path)
+            else:
+                print("Re-download failed, continuing with the existing file.")
     else:
-        print("File does not exist, downloading...")
-        download_redu_metadata(file_path)
+        print(f"File does not exist, downloading to {file_path}...")
+        if not download_redu_metadata(file_path):
+            print(f"Download failed. {manual_download_hint(file_path)}")
+            return None, None
         mtime = os.path.getmtime(file_path)
 
     file_date = datetime.fromtimestamp(mtime)
