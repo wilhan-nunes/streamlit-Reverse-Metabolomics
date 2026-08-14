@@ -165,14 +165,20 @@ def get_redu_path() -> Path:
 
 
 def manual_download_hint(file_path) -> str:
-    """Instructions for users whose automatic download failed."""
+    """Instructions for users whose automatic download failed.
+
+    Paths are wrapped in backticks: this string is rendered as Markdown
+    (e.g. via st.error), which otherwise treats a bare backslash before
+    punctuation as an escape and silently drops it — corrupting Windows
+    paths like "C:\\Users\\name\\.reverse-metabolomics".
+    """
     file_path = Path(file_path)
     return (
         f"Download https://redu.gnps2.org/dump manually, rename the downloaded "
-        f"file to '{RAW_REDU_FILENAME}', and place it in {file_path.parent} — "
+        f"file to `{RAW_REDU_FILENAME}`, and place it in `{file_path.parent}` — "
         f"the app will detect and convert it automatically next time it loads. "
         f"Alternatively, convert it to parquet yourself and save it to "
-        f"{file_path}, or point REDU_METADATA_PATH at an existing parquet file."
+        f"`{file_path}`, or point REDU_METADATA_PATH at an existing parquet file."
     )
 
 
