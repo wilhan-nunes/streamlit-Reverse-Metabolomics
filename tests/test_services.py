@@ -178,9 +178,9 @@ class TestFASSTService:
         r2 = requests.get(f"{FASST_HOST}/search/result/{task_id}", timeout=TIMEOUT)
         assert r2.status_code == 200, f"Result endpoint returned {r2.status_code}"
         data = r2.json()
-        # Either still pending or already done — both are valid shapes
+        # Either still in-flight or already done — both are valid shapes
         assert isinstance(data, dict), "Expected dict response from result endpoint"
-        if data.get("status") == "PENDING":
+        if data.get("status") in {"PENDING", "RUNNING", "STARTED", "RETRY"}:
             pass  # service is up and processing
         else:
             assert "results" in data, f"Completed response missing 'results' key: {data}"
