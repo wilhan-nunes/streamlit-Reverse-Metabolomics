@@ -27,7 +27,13 @@ def _blocking_for_results(task_id: str, host: str = HOST, retries_max: int = 120
     raise TimeoutError("Timeout waiting for results from FASST API")
 
 
-def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_delta=200, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7):
+def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_delta=200, precursor_mz_tol=0.02, fragment_mz_tol=0.02, min_cos=0.7,
+                    raise_on_error=False):
+    """Query FASST for every USI in query_df.
+
+    With raise_on_error=False a failing USI is logged and skipped. Callers that cache
+    the result must pass True, so a transient FASST failure is never cached as "no hits".
+    """
     output_results_list = []
 
     for query_element in tqdm(query_df.to_dict(orient="records")):
@@ -59,8 +65,10 @@ def masst_query_all(query_df, database, analog=False, lower_delta=130, upper_del
                 results_df["flag"] = query_element["flag"]
 
             output_results_list.append(results_df)
-        except:
-            print(f"Error occurred while processing USI: {usi}")
+        except Exception as e:
+            print(f"Error occurred while processing USI: {usi}: {e!r}")
+            if raise_on_error:
+                raise RuntimeError(f"FASST query failed for {usi}: {e}") from e
 
     if len(output_results_list) == 0:
         return pd.DataFrame()

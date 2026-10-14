@@ -123,9 +123,15 @@ def create_colormap():
 
 cmap_wbr = create_colormap()
 
-@st.cache_data
+@st.cache_data(ttl=7 * 24 * 3600)  # 1 week; *_nightly indexes change daily, so example results can lag by up to a week
 def cached_masst_results(query_df, database, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos):
-    return masst_query_all(query_df, database, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos)
+    # raise_on_error: st.cache_data does not cache exceptions, so a FASST outage
+    # can't freeze an empty result into the cache for every later visitor.
+    results = masst_query_all(query_df, database, analog, lower_delta, upper_delta, precursor_mz_tol, fragment_mz_tol, min_cos,
+                              raise_on_error=True)
+    if len(results) == 0:
+        raise RuntimeError("FASST returned no matches for the example set")
+    return results
 
 
 def load_and_merge_data(fastmasst_results: pd.DataFrame, usis_table: pd.DataFrame, df_redu: pd.DataFrame,
@@ -870,14 +876,19 @@ with st.sidebar:
 if st.session_state.get('run_masst_query', False):
     # Skip actual MASST query if using example data (already loaded)
     if use_example:
-        results = cached_masst_results(query_df, **masst_query_params)
-        st.session_state.results = results
+        with st.spinner("Running MASST query..."):
+            try:
+                st.session_state.results = cached_masst_results(query_df, **masst_query_params)
+            except Exception as e:
+                st.error(f"The MASST query failed, please try again in a few minutes. Details: {e}", icon="⚠️")
 
     elif 0 < len(query_df) <= 20:
         with st.spinner("Running MASST query..."):
             # Here you would call your imported masst_query_all function
             results = masst_query_all(query_df, **masst_query_params)
             st.success(f"Query performed with {len(query_df)} USIs with parameters: {masst_query_params}")
+            if len(results) == 0:
+                st.warning("MASST returned no matches. Check the USIs, or try again later if the FASST service is busy.", icon="⚠️")
             st.session_state.results = results
             # st.write(results)
     elif len(query_df) > 20:
