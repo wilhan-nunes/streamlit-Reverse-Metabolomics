@@ -1,0 +1,3364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reverse Metabolomics</title>
+  <!-- App version (YYYY-MM-DD, same scheme as the Streamlit app). This tag is the
+       single source: the footer reads it. Bump it with every change and add an
+       entry to CHANGELOG.md next to this file. -->
+  <meta name="version" content="2026-10-14">
+  <meta name="description" content="Search MS/MS spectra (USIs) across public metabolomics data with FASST and see which body parts, diseases and organisms they appear in, using ReDU metadata. The analysis runs in your browser.">
+  <!--
+    Reverse Metabolomics, browser edition. Ported from the Streamlit app in
+    github.com/wilhan-nunes/streamlit-Reverse-Metabolomics (app.py), keeping every
+    figure and table it renders: counts table, heatmap (or bar chart for a single
+    compound), merged-data preview with mirror-plot links, dataset distribution
+    chart, and dataset details.
+
+    NETWORK. This app cannot be offline: its whole job is to query public services.
+      * FASST (api.fasst.gnps2.org) runs the spectral searches. It sends CORS headers
+        for *.gnps2.org origins only, so searches work when this page is served from
+        apps.gnps2.org and fail (with a visible message) from file:// or localhost.
+        Only the USIs and search parameters are sent.
+      * MetaboLights and Metabolomics Workbench are asked for dataset details.
+        MassIVE does not send CORS headers, so MassIVE datasets get links instead
+        (flip MASSIVE_ALLOWS_CORS if that ever changes).
+      * ReDU has no CORS-enabled API and its dump is ~0.9 GB, so the user drops the
+        dump file in and it is parsed here. A compact copy (7 columns) is cached in
+        IndexedDB so the next visit does not need the file again.
+    No libraries are loaded; charts are hand-rolled SVG.
+  -->
+  <style>
+    /* House palette. Every color below comes from here — add new tokens rather
+       than inlining hex values, so a future restyle is one block of edits. */
+    :root {
+      --bg: #fafafa; --card: #fff; --ink: #222; --muted: #6c6c70;
+      --line: #e3e6ea; --accent: #2980b9; --accent-bg: #eef3fc;
+      --ok: #0a7c00; --err: #b00020; --warn: #8a5a00;
+    }
+    /* App-specific tokens. The heatmap stops are the Streamlit app's
+       white -> blue -> red colormap, kept so figures match the published protocol. */
+    :root {
+      --info-ink: #1a5276; --ok-bg: #eaf7ef; --warn-bg: #fff5e1; --err-bg: #fdecea;
+      --soft: #eef1f4; --soft-ink: #444; --row-line: #f2f4f6; --drop-line: #cdd5e0;
+      --grid: #eceef1; --series-2: #2f8f5b;
+      --hm-lo: #ffffff; --hm-mid: #c7d6f0; --hm-hi: #ebb0a6; --hm-nan: #f1f2f4;
+      --frame: #111;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0; background: var(--bg); color: var(--ink);
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 48px 24px; }
+
+    a { color: var(--accent); }
+    a.back { color: var(--accent); text-decoration: none; font-size: 0.9em; }
+    a.back:hover { text-decoration: underline; }
+    h1 { font-size: 1.8em; margin: 12px 0 6px; }
+    .sub { color: var(--muted); margin: 0 0 28px; line-height: 1.5; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+    [hidden] { display: none !important; }
+
+    /* --- drop zone ---------------------------------------------------- */
+    #drop {
+      background: var(--card); border: 2px dashed var(--drop-line); border-radius: 14px;
+      padding: 30px 24px; cursor: pointer; text-align: center;
+      transition: background-color .15s, border-color .15s, box-shadow .15s;
+    }
+    #drop:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(41,128,185,.10); }
+    #drop.over {
+      background: var(--accent-bg); border-color: var(--accent); border-style: solid;
+      box-shadow: 0 6px 22px rgba(41,128,185,.18);
+    }
+    #drop strong { display: block; font-size: 1.05em; margin-bottom: 6px; }
+    #drop .hint { color: var(--muted); font-size: 0.88em; line-height: 1.5; }
+
+    /* --- status banner + inline messages ------------------------------ */
+    #status, .msg {
+      margin: 0 0 18px; padding: 11px 14px; border-radius: 8px; font-size: 0.9em; line-height: 1.45;
+    }
+    #status { display: none; }
+    #status.shown { display: block; }
+    #status.info, .msg.info { background: var(--accent-bg); color: var(--info-ink); }
+    #status.ok,   .msg.ok   { background: var(--ok-bg); color: var(--ok); }
+    #status.warn, .msg.warn { background: var(--warn-bg); color: var(--warn); }
+    #status.err,  .msg.err  { background: var(--err-bg); color: var(--err); }
+    .msg { margin: 12px 0 0; }
+
+    /* --- cards ---------------------------------------------------------- */
+    .card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 10px; padding: 20px 22px; margin-bottom: 18px;
+    }
+    .card h2 {
+      margin: 0 0 14px; font-size: 0.78em; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+    }
+    .card h3 { margin: 18px 0 8px; font-size: 1em; }
+    .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+    .card-head h2 { margin: 0; }
+    .step {
+      display: inline-block; width: 18px; height: 18px; line-height: 18px; border-radius: 50%;
+      background: var(--accent); color: #fff; text-align: center; font-size: 0.9em;
+      margin-right: 6px; letter-spacing: 0;
+    }
+    .step.done { background: var(--ok); }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.85em; }
+
+    /* collapsible search configuration */
+    details.card { padding: 0; }
+    details.card > summary {
+      list-style: none; cursor: pointer; padding: 18px 22px; display: flex;
+      align-items: baseline; gap: 12px; flex-wrap: wrap; user-select: none;
+    }
+    details.card > summary::-webkit-details-marker { display: none; }
+    details.card > summary h2 { margin: 0; }
+    details.card > summary .chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
+    details.card[open] > summary .chev { transform: rotate(90deg); }
+    details.card > summary:hover h2 { color: var(--accent); }
+    .config-body { padding: 0 22px 22px; }
+    .subhead {
+      font-size: 0.72em; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+      font-weight: 600; margin: 18px 0 8px; display: flex; gap: 10px; align-items: baseline;
+    }
+    .subhead:first-child { margin-top: 0; }
+
+    /* --- form controls ------------------------------------------------ */
+    .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px 18px; }
+    .field label, .lbl {
+      display: block; font-size: 0.7em; text-transform: uppercase; letter-spacing: .04em;
+      color: var(--muted); margin-bottom: 4px; font-weight: 600;
+    }
+    .field .help { font-size: 0.78em; color: var(--muted); margin-top: 3px; }
+    input[type=text], input[type=number], input:not([type]), select, textarea {
+      font: inherit; font-size: 0.9em; padding: 7px 9px; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--card); color: var(--ink); width: 100%;
+    }
+    input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-bg); border-color: var(--accent); }
+    input.bad { border-color: var(--err); background: var(--err-bg); }
+    input:disabled, select:disabled { background: var(--soft); color: var(--muted); }
+    textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82em; min-height: 120px; resize: vertical; }
+    label.check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; cursor: pointer; }
+    .controls { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end; margin-bottom: 14px; }
+    .controls .field { min-width: 170px; flex: 1 1 170px; max-width: 280px; }
+    .controls .field.narrow { flex: 0 1 110px; min-width: 90px; }
+    .controls .checks { display: flex; flex-direction: column; gap: 6px; padding-bottom: 4px; }
+
+    button {
+      font: inherit; font-size: 0.9em; padding: 8px 16px; border: 0;
+      border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: .5; cursor: default; filter: none; }
+    button.secondary { background: var(--soft); color: var(--soft-ink); }
+    button.link { background: none; color: var(--accent); padding: 0; }
+    button.link:hover { text-decoration: underline; }
+    button.small { font-size: 0.8em; padding: 5px 10px; }
+
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row.spread { justify-content: space-between; }
+    .actions { margin-top: 20px; }
+
+    /* --- USI editor ----------------------------------------------------- */
+    .usi-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table.usi { width: 100%; border-collapse: collapse; font-size: 0.88em; }
+    table.usi th { position: sticky; top: 0; background: var(--card); z-index: 1; padding: 8px 8px; cursor: default; }
+    table.usi th:hover { color: var(--muted); }
+    table.usi td { padding: 3px 4px; border-bottom: 1px solid var(--row-line); vertical-align: middle; }
+    table.usi td.idx { color: var(--muted); width: 34px; text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; }
+    table.usi td.del { width: 34px; text-align: center; }
+    table.usi input { border-color: transparent; background: transparent; padding: 5px 6px; }
+    table.usi input:hover { border-color: var(--line); }
+    table.usi input:focus { background: var(--card); }
+    table.usi input.usi-in { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+    .x { background: none; color: var(--muted); padding: 2px 6px; font-size: 1.1em; line-height: 1; }
+    .x:hover { color: var(--err); filter: none; }
+
+    /* --- progress ------------------------------------------------------- */
+    .progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 12px 0 6px; }
+    .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+    .progress-label { font-size: 0.82em; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .runlist { max-height: 220px; overflow: auto; margin-top: 10px; font-size: 0.84em; border: 1px solid var(--line); border-radius: 8px; }
+    .runlist div { display: flex; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--row-line); align-items: baseline; }
+    .runlist div:last-child { border-bottom: 0; }
+    .runlist .nm { flex: 0 0 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .runlist .u { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+    .pill { flex: 0 0 auto; font-size: 0.85em; padding: 1px 8px; border-radius: 10px; background: var(--soft); color: var(--muted); white-space: nowrap; }
+    .pill.running { background: var(--accent-bg); color: var(--info-ink); }
+    .pill.done { background: var(--ok-bg); color: var(--ok); }
+    .pill.failed { background: var(--err-bg); color: var(--err); }
+
+    /* --- ReDU card ------------------------------------------------------ */
+    .redu-loaded { display: flex; gap: 14px 28px; flex-wrap: wrap; align-items: center; }
+    .stat .lbl { margin-bottom: 3px; }
+    .stat .val { font-size: 1.15em; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+    /* --- chips (multi-select) ----------------------------------------- */
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-bg); color: var(--info-ink); border-radius: 12px; padding: 2px 4px 2px 10px; font-size: 0.82em; }
+    .chip button { background: none; color: var(--info-ink); padding: 0 4px; font-size: 1.1em; line-height: 1; }
+
+    /* --- tables ----------------------------------------------------------- */
+    .table-wrap { overflow-x: auto; }
+    table.data { width: 100%; border-collapse: collapse; font-size: 0.86em; }
+    th {
+      text-align: left; font-size: 0.7em; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted); font-weight: 600;
+      padding: 0 10px 8px 0; border-bottom: 1px solid var(--line);
+      user-select: none; white-space: nowrap;
+    }
+    table.data th { cursor: pointer; }
+    table.data th:hover { color: var(--accent); }
+    th .arrow { opacity: .45; }
+    td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--row-line); font-variant-numeric: tabular-nums; vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    td.num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; padding-right: 16px; }
+    td.cut { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.clamp { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    td.clamp.open { white-space: normal; word-break: break-word; }
+    td.null { color: var(--muted); }
+    .pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: 0.85em; color: var(--muted); }
+
+    /* --- charts ----------------------------------------------------------- */
+    .chart-scroll { overflow: auto; max-height: 1400px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+    .chart-scroll svg { display: block; margin: 0 auto; max-width: none; }
+    .card-foot { margin-top: 12px; }
+    #tip {
+      position: fixed; z-index: 10; pointer-events: none; display: none; max-width: 360px;
+      background: var(--ink); color: var(--card); font-size: 0.8em; line-height: 1.4;
+      padding: 6px 9px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+      white-space: pre-line;
+    }
+
+    /* --- dataset details ------------------------------------------------- */
+    .details-body h3 { margin: 14px 0 4px; font-size: 1.1em; }
+    .details-body h4 { margin: 14px 0 4px; font-size: 0.72em; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .details-body p, .details-body li { line-height: 1.5; font-size: 0.92em; white-space: pre-line; }
+    .details-body ul { margin: 4px 0; padding-left: 20px; }
+    .details-body details { margin-top: 12px; }
+    .details-body summary { cursor: pointer; color: var(--accent); font-size: 0.9em; }
+
+    .about p, .about li { line-height: 1.55; }
+    .about h3 { margin: 18px 0 6px; font-size: 0.95em; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
+    @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } .wrap { padding: 32px 16px; } }
+    blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--soft-ink); font-size: 0.9em; line-height: 1.5; }
+    pre { background: var(--soft); padding: 10px 12px; border-radius: 6px; overflow: auto; font-size: 0.78em; }
+    .foot { color: var(--muted); font-size: 0.82em; margin-top: 22px; line-height: 1.5; }
+    .foot h3 { color: var(--ink); font-size: 0.95em; margin: 18px 0 4px; }
+    .foot ul { padding-left: 18px; margin: 4px 0; }
+    .foot summary { cursor: pointer; color: var(--accent); }
+  </style>
+  <script async defer data-website-id="40220769-afe7-4fa7-afc3-a8205c25dd1c" src="https://analytics.gnps2.org/umami.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <a class="back" href="/">&larr; All apps</a>
+
+  <h1>Reverse Metabolomics</h1>
+  <p class="sub">
+    Search MS/MS spectra (USIs) across public metabolomics data with FASST, then see
+    which body parts, diseases and organisms they turn up in, using ReDU sample
+    metadata. All analysis runs in your browser: your ReDU file never leaves your
+    machine, and only the USIs and search settings are sent to the FASST search service.
+  </p>
+
+  <div id="status"></div>
+
+  <!-- Step 1: ReDU metadata -->
+  <section class="card" id="redu-card">
+    <div class="card-head">
+      <h2><span class="step" id="redu-step">1</span>ReDU sample metadata</h2>
+      <span class="muted small" id="redu-head-note"></span>
+    </div>
+
+    <div id="redu-loaded" hidden>
+      <div class="redu-loaded">
+        <div class="stat"><div class="lbl">Files described</div><div class="val" id="redu-n"></div></div>
+        <div class="stat"><div class="lbl">ReDU file date</div><div class="val" id="redu-date"></div></div>
+        <div class="stat"><div class="lbl">Source</div><div class="val small" id="redu-src" style="font-weight:600"></div></div>
+        <div class="row" style="margin-left:auto">
+          <button class="secondary small" id="redu-replace">Load a newer file</button>
+          <button class="secondary small" id="redu-export" title="A 7-column gzipped copy (a few MB) that loads here like the full dump — handy for sharing within a lab">Export compact copy</button>
+          <button class="secondary small" id="redu-forget">Forget saved copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="redu-drop-area">
+      <div id="drop" role="button" tabindex="0">
+        <strong>Drop the ReDU metadata file here</strong>
+        <div class="hint">
+          the tab-separated dump from <a href="https://redu.gnps2.org/dump" target="_blank" rel="noopener" id="redu-dl">redu.gnps2.org/dump</a>
+          (about 0.9&nbsp;GB, so the download takes a few minutes) — a <code>.gz</code> copy or a compact
+          export from this app also works &middot; or click to choose
+        </div>
+      </div>
+      <p class="muted small" style="margin:10px 0 0;line-height:1.5">
+        ReDU has no API this page can query, so it reads the file here. You only need to do this once per browser:
+        a compact copy of the 7 columns the analysis uses is saved in this browser for next time.
+        You can run a search before the file is loaded.
+      </p>
+    </div>
+    <div id="redu-progress" hidden>
+      <div class="progress"><div id="redu-bar"></div></div>
+      <div class="progress-label" id="redu-progress-label"></div>
+    </div>
+    <input type="file" id="redu-input" accept=".tsv,.txt,.gz,.tsv.gz,text/tab-separated-values" hidden>
+  </section>
+
+  <!-- Step 2: search configuration (collapsible) -->
+  <details class="card" id="config" open>
+    <summary>
+      <h2><span class="step" id="config-step">2</span>Search configuration</h2>
+      <span class="muted small" id="config-summary"></span>
+      <span class="chev" aria-hidden="true">&#9656;</span>
+    </summary>
+    <div class="config-body">
+      <div class="subhead">Query spectra (USIs) <span class="muted" id="usi-count" style="text-transform:none;letter-spacing:0;font-weight:400"></span></div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="secondary small" id="ex1" title="Phe-CA, Phe-C4:0, His-C4:0 — from the reverse metabolomics protocol paper">Example set 1</button>
+        <button class="secondary small" id="ex2" title="HIV-related N-acyl amides and candidates">Example set 2</button>
+        <span class="muted small">&middot;</span>
+        <button class="secondary small" id="import-toggle">Paste or import a list&hellip;</button>
+        <button class="secondary small" id="usi-export">Export list</button>
+        <button class="secondary small" id="add-row">+ Add row</button>
+        <button class="secondary small" id="clear-rows">Clear</button>
+      </div>
+      <div id="import-panel" hidden style="margin-bottom:12px">
+        <textarea id="import-text" placeholder="One USI per line, optionally followed by a compound name (tab- or comma-separated). A header line with 'usi' and 'compound_name' is fine too.&#10;&#10;mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00006582001,Phe-CA"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="small" id="import-replace">Replace table</button>
+          <button class="secondary small" id="import-append">Append to table</button>
+          <button class="secondary small" id="import-file-btn">Choose a CSV/TSV file&hellip;</button>
+          <input type="file" id="import-file" accept=".csv,.tsv,.txt" hidden>
+        </div>
+      </div>
+      <div class="usi-wrap">
+        <table class="usi">
+          <thead><tr><th>#</th><th>USI</th><th style="width:30%">Compound name</th><th></th></tr></thead>
+          <tbody id="usi-rows"></tbody>
+        </table>
+      </div>
+      <p class="muted small" style="margin:6px 0 0">There is no limit on the number of USIs. They are searched a few at a time to go easy on FASST.</p>
+
+      <div class="subhead">FASST search parameters</div>
+      <div class="fields">
+        <div class="field">
+          <label for="p-database">Database</label>
+          <input id="p-database" list="db-list" autocomplete="off" spellcheck="false">
+          <datalist id="db-list"></datalist>
+          <div class="help">FASST index to search</div>
+        </div>
+        <div class="field">
+          <label for="p-analog">Analog search</label>
+          <select id="p-analog"><option value="No">No</option><option value="Yes">Yes</option></select>
+        </div>
+        <div class="field analog-only">
+          <label for="p-lower">Lower precursor m/z delta (Da)</label>
+          <input type="number" id="p-lower" min="0.001" max="1000" step="0.1">
+        </div>
+        <div class="field analog-only">
+          <label for="p-upper">Upper precursor m/z delta (Da)</label>
+          <input type="number" id="p-upper" min="0.001" max="1000" step="0.1">
+          <div class="help" id="analog-range"></div>
+        </div>
+        <div class="field">
+          <label for="p-prec">Precursor m/z tolerance</label>
+          <input type="number" id="p-prec" min="0.001" max="1" step="0.001">
+          <div class="help">Also used to filter matches by delta mass</div>
+        </div>
+        <div class="field">
+          <label for="p-frag">Fragment m/z tolerance</label>
+          <input type="number" id="p-frag" min="0.001" max="1" step="0.001">
+        </div>
+        <div class="field">
+          <label for="p-cos">Cosine similarity threshold</label>
+          <input type="number" id="p-cos" min="0" max="1" step="0.01">
+        </div>
+      </div>
+
+      <div class="row actions">
+        <button id="run">Run FASST search</button>
+        <button class="secondary" id="cancel" hidden>Cancel</button>
+        <button class="secondary" id="reset" title="Clear the query, parameters and results and start over">New query</button>
+        <button class="link small" id="copy-link" style="margin-left:auto">Copy shareable link</button>
+      </div>
+      <div id="run-progress" hidden>
+        <div class="progress"><div id="run-bar"></div></div>
+        <div class="progress-label" id="run-label"></div>
+        <div class="runlist" id="run-list"></div>
+      </div>
+    </div>
+  </details>
+
+  <!-- Search finished but ReDU not loaded yet -->
+  <div class="card" id="need-redu" hidden>
+    <h2>Search results</h2>
+    <p style="margin:0;line-height:1.5" id="need-redu-text"></p>
+  </div>
+
+  <div id="results" hidden>
+    <section class="card" id="filters">
+      <h2>Analysis options</h2>
+      <div class="controls" style="margin-bottom:0">
+        <div class="field">
+          <label for="f-organism">Organism</label>
+          <select id="f-organism">
+            <option>Humans</option><option>Rodents</option><option>All organisms</option><option>Manual Entry</option>
+          </select>
+        </div>
+        <div class="field" id="manual-taxa-field" hidden style="max-width:420px;flex:2 1 300px">
+          <label for="f-taxa">NCBI taxonomy (search by ID or name)</label>
+          <input id="f-taxa" list="taxa-list" autocomplete="off" placeholder="e.g. 10090|Mus musculus">
+          <datalist id="taxa-list"></datalist>
+          <div class="chips" id="taxa-chips"></div>
+        </div>
+        <div class="field">
+          <label for="f-column">Analysis variable</label>
+          <select id="f-column"></select>
+        </div>
+        <div class="field" style="max-width:420px;flex:2 1 300px">
+          <label for="f-exclude">Exclude from analysis (optional)</label>
+          <input id="f-exclude" list="exclude-list" autocomplete="off" placeholder="pick values to drop from the chart">
+          <datalist id="exclude-list"></datalist>
+          <div class="chips" id="exclude-chips"></div>
+        </div>
+      </div>
+      <div class="msg info" id="filter-info"></div>
+    </section>
+
+    <section class="card" id="chart-card">
+      <div class="card-head">
+        <h2 id="chart-title">Heatmap</h2>
+        <span class="muted small" id="chart-caption"></span>
+      </div>
+      <div id="heatmap-controls" class="controls" hidden>
+        <div class="field">
+          <label for="h-type">Heatmap type</label>
+          <select id="h-type"><option>Raw counts</option><option>Log-transformed counts</option><option>ReDU-normalized counts</option></select>
+        </div>
+        <div class="field">
+          <label for="h-metric">Clustering metric</label>
+          <select id="h-metric">
+            <option value="braycurtis">Bray-Curtis</option><option value="canberra">Canberra</option>
+            <option value="correlation">Correlation</option><option value="cosine">Cosine</option>
+            <option value="euclidean">Euclidean</option><option value="jaccard">Jaccard</option>
+            <option value="cityblock">City block (Manhattan)</option><option value="chebyshev">Chebyshev</option>
+            <option value="sqeuclidean">Squared Euclidean</option><option value="hamming">Hamming</option>
+          </select>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="h-colclust"> Cluster columns</label>
+          <label class="check"><input type="checkbox" id="h-rowclust"> Cluster rows</label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="h-custom"> Custom size (in)</label>
+        </div>
+        <div class="field narrow"><label for="h-width">Width</label><input type="number" id="h-width" min="2" max="10" value="4" disabled></div>
+        <div class="field narrow"><label for="h-height">Height</label><input type="number" id="h-height" min="4" max="15" value="4" disabled></div>
+      </div>
+      <div id="bar-controls" class="controls" hidden>
+        <div class="field">
+          <label for="b-type">Chart type</label>
+          <select id="b-type"><option>Raw counts</option><option>ReDU-normalized counts</option></select>
+        </div>
+        <div class="field">
+          <label for="b-sort">Sort by</label>
+          <select id="b-sort"><option>Descending (highest first)</option><option>Ascending (lowest first)</option><option>Alphabetical</option></select>
+        </div>
+        <div class="field">
+          <label for="b-orient">Orientation</label>
+          <select id="b-orient"><option>Horizontal</option><option>Vertical</option></select>
+        </div>
+        <div class="checks"><label class="check"><input type="checkbox" id="b-values" checked> Show values on bars</label></div>
+      </div>
+      <div id="chart-msg"></div>
+      <div class="chart-scroll" id="chart-host"></div>
+      <div class="row card-foot" id="chart-downloads">
+        <button class="secondary small" id="dl-chart-data">Download data (CSV)</button>
+        <button class="secondary small" id="dl-chart-svg">Download chart (SVG)</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 id="counts-title">Counts</h2>
+        <button class="secondary small" id="dl-counts">Download counts table</button>
+      </div>
+      <div class="table-wrap" id="counts-host"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Datasets distribution</h2>
+        <span class="muted small">Spectral matches across datasets</span>
+      </div>
+      <div class="controls">
+        <div class="field"><label for="d-compound">Compound</label><select id="d-compound"></select></div>
+        <div class="field"><label for="d-strata">Stratify by</label><select id="d-strata"></select></div>
+        <div class="field narrow">
+          <label for="d-top">Show</label>
+          <select id="d-top"><option value="25">Top 25</option><option value="50" selected>Top 50</option><option value="100">Top 100</option><option value="0">All</option></select>
+        </div>
+        <div class="checks"><label class="check"><input type="checkbox" id="d-auto" checked> Fit height to datasets</label></div>
+        <div class="field">
+          <label for="d-height">Chart height <span id="d-height-val"></span></label>
+          <input type="range" id="d-height" min="3" max="15" step="1" value="6" disabled style="width:100%">
+        </div>
+      </div>
+      <div id="datasets-msg"></div>
+      <div class="chart-scroll" id="datasets-host"></div>
+      <div class="row card-foot">
+        <button class="secondary small" id="dl-datasets-data">Download dataset distribution data</button>
+        <button class="secondary small" id="dl-datasets-svg">Download dataset distribution chart (SVG)</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Merged dataset</h2>
+        <button class="secondary small" id="dl-merged">Download full merged dataset</button>
+      </div>
+      <p class="muted small" style="margin:-6px 0 12px">FASST matches joined to ReDU metadata. Click a column header to sort; <em>View</em> opens the mirror plot of the query against the match.</p>
+      <div class="table-wrap" id="merged-host"></div>
+    </section>
+
+    <section class="card">
+      <h2>Dataset details</h2>
+      <div class="controls">
+        <div class="field" style="max-width:360px"><label for="ds-select">Dataset</label><select id="ds-select"></select></div>
+      </div>
+      <div class="details-body" id="details-host"></div>
+    </section>
+  </div>
+
+  <section class="card about" id="about">
+    <h2>How to use this tool</h2>
+    <div class="grid2">
+      <div>
+        <ol style="padding-left:20px;margin-top:0">
+          <li><strong>Load ReDU metadata</strong> (step 1): drop the dump from redu.gnps2.org/dump. It's saved in this browser, so you only do this once.</li>
+          <li><strong>Enter USIs</strong> (step 2): type or paste Universal Spectrum Identifiers with compound names, import a CSV/TSV, or load an example set.</li>
+          <li><strong>Set FASST parameters</strong> if the defaults don't suit you.</li>
+          <li><strong>Run the FASST search</strong>. Each USI is searched against the chosen index.</li>
+          <li><strong>Adjust the analysis</strong>: choose the organism and the ReDU variable (body part, disease, sex or age), and exclude values you don't want.</li>
+          <li><strong>Download</strong> tables as CSV and figures as SVG.</li>
+        </ol>
+      </div>
+      <div>
+        <h3 style="margin-top:0">Available visualizations</h3>
+        <ul style="padding-left:20px">
+          <li><strong>Raw counts</strong>: spectral match counts.</li>
+          <li><strong>Log-transformed counts</strong>: log2(count + 1), which makes low-abundance features easier to see.</li>
+          <li><strong>ReDU-normalized counts</strong>: counts normalized by how many ReDU samples exist for each category.</li>
+          <li>A query with a single compound gets a bar chart instead of a heatmap.</li>
+        </ul>
+        <h3>Tips</h3>
+        <ul style="padding-left:20px">
+          <li>Use the clustering options to reveal patterns.</li>
+          <li>The page URL keeps your query and settings, so <em>Copy shareable link</em> lets others reproduce them.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="muted small" style="margin-bottom:0">This app is part of the GNPS downstream analysis ecosystem known as <strong>MetaboApps</strong>.
+      <a href="https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/toolindex/#gnps2-web-tools" target="_blank" rel="noopener">Check out other tools</a>.</p>
+  </section>
+
+  <footer class="foot">
+    <div class="grid2">
+      <div>
+        <h3>Citation</h3>
+        If you use this tool, please cite:
+        <blockquote>Charron-Lamoureux, V., Mannochio-Russo, H., Lamichhane, S. et al. A guide to reverse metabolomics—a framework for big data discovery strategy. <em>Nat Protoc</em> (2025). <a href="https://doi.org/10.1038/s41596-024-01136-2" target="_blank" rel="noopener">doi.org/10.1038/s41596-024-01136-2</a></blockquote>
+        <blockquote>Mannochio-Russo, H., Gonçalves Nunes, W.D., Zhao, H.N. et al. Bridging complexity and accessibility in metabolomics with MetaboApps. <em>Nat Methods</em> 23, 1475–1477 (2026). <a href="https://doi.org/10.1038/s41592-026-03186-8" target="_blank" rel="noopener">doi.org/10.1038/s41592-026-03186-8</a></blockquote>
+      </div>
+      <div>
+        <h3>Contributors</h3>
+        <ul>
+          <li><a href="https://scholar.google.com/citations?user=4cPVoeIAAAAJ" target="_blank" rel="noopener">Wilhan Nunes PhD</a> — UC San Diego</li>
+          <li><a href="https://sites.google.com/view/helenamrusso/home" target="_blank" rel="noopener">Helena Russo PhD</a> — UC San Diego</li>
+          <li><a href="https://scholar.google.com/citations?user=_OboZ0YAAAAJ" target="_blank" rel="noopener">Vincent Lamoureux PhD</a> — UC San Diego</li>
+          <li><a href="https://scholar.google.com/citations?user=_iKPhb0AAAAJ" target="_blank" rel="noopener">Prajit Rajkumar</a> — UC San Diego</li>
+          <li><a href="https://www.cs.ucr.edu/~mingxunw/" target="_blank" rel="noopener">Mingxun Wang PhD</a> — UC Riverside</li>
+        </ul>
+        <h3>Documentation and resources</h3>
+        <ul>
+          <li><a href="https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/toolindex/" target="_blank" rel="noopener">Other similar tools</a></li>
+          <li><a href="https://wang-bioinformatics-lab.github.io/GNPS2_Documentation/masst/" target="_blank" rel="noopener">MASST documentation</a></li>
+          <li><a href="https://fasst.gnps2.org/fastsearch/" target="_blank" rel="noopener">Fast search page</a></li>
+        </ul>
+        <details style="margin-top:8px">
+          <summary>API reference (URL parameters)</summary>
+          <p>Every setting below can be passed in the page URL, e.g. <code>?example=1&amp;organism=Rodents</code>. The <code>usi</code> value is a URL-encoded JSON object of <code>{"compound_name": "mzspec:..."}</code>.</p>
+          <pre id="api-schema"></pre>
+        </details>
+      </div>
+    </div>
+    <p>
+      Matches are kept when their delta mass is within the precursor tolerance, then joined to ReDU by
+      dataset and file name (without extension). Skin and blood sub-sites are merged into “skin” and “blood”.
+      Version <span id="app-version" class="mono"></span> &middot;
+      <a href="https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics/blob/main/browser_app/CHANGELOG.md" target="_blank" rel="noopener">changelog</a> &middot;
+      browser edition of <a href="https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics" target="_blank" rel="noopener">streamlit-Reverse-Metabolomics</a>
+      (ported from Streamlit app version 2026-08-14).
+    </p>
+  </footer>
+</div>
+<div id="tip"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var versionMeta = document.querySelector('meta[name="version"]');
+  var APP_VERSION = versionMeta ? versionMeta.getAttribute("content") : "unknown";
+
+  // ===================================================================
+  // Constants
+  // ===================================================================
+
+  var FASST_HOST = "https://api.fasst.gnps2.org";
+  var FASST_IN_FLIGHT = { PENDING: 1, RUNNING: 1, STARTED: 1, RETRY: 1 };
+  var FASST_POLL_MAX = 120;          // same budget as masst_client.py: ~2 min per USI
+  var FASST_POLL_MS = 1000;
+  var FASST_PARALLEL = 3;            // concurrent USIs; FASST is a shared service
+  var FETCH_TIMEOUT_MS = 30000;
+
+  // fasst.gnps2.org/libraries has no CORS headers, so the list can't be fetched
+  // live; the field also accepts any name typed in, so a new index still works.
+  var DATABASES = [
+    "gnpsdata_index", "gnpsdata_test_index", "gnpslibrary", "gnpslibrary_no_filters",
+    "massivedata_index", "massivekb_index", "metabolomicspanrepo_index_latest",
+    "metabolomicspanrepo_index_nightly", "NORMAN", "ORNL_Bioscales2", "ORNL_Populus_LC_MSMS",
+    "panrepo_2024_11_12", "panrepo_2025_06_18", "ptfi2_index"
+  ];
+
+  // MassIVE's PROXI endpoint sends no Access-Control-Allow-Origin header. Trying
+  // anyway would only put a CORS error in the console, so we link out instead.
+  var MASSIVE_ALLOWS_CORS = false;
+
+  var DEFAULTS = {
+    database: "metabolomicspanrepo_index_nightly", analog: false,
+    lower_delta: 100, upper_delta: 200,
+    precursor_tol: 0.02, fragment_tol: 0.02, min_cos: 0.7, organism: "Humans"
+  };
+
+  // Same schema the Streamlit app exposes (utils/query_params.py), so links
+  // made by other tools keep working here.
+  var PARAM_SCHEMA = [
+    { name: "usi", type: "json", "default": null, description: "USI data as JSON object: {\"compound_name\": \"mzspec:...\", ...}" },
+    { name: "example", type: "string", "default": null, description: "Load example dataset (1 or 2)", "enum": ["1", "2"] },
+    { name: "database", type: "string", "default": "metabolomicspanrepo_index_nightly", description: "MASST database to search" },
+    { name: "analog", type: "boolean", "default": false, description: "Enable analog search" },
+    { name: "lower_delta", type: "float", "default": 130, description: "Lower delta m/z for analog search (Da)" },
+    { name: "upper_delta", type: "float", "default": 200, description: "Upper delta m/z for analog search (Da)" },
+    { name: "precursor_tol", type: "float", "default": 0.02, description: "Precursor m/z tolerance (Da)" },
+    { name: "fragment_tol", type: "float", "default": 0.02, description: "Fragment m/z tolerance (Da)" },
+    { name: "min_cos", type: "float", "default": 0.7, description: "Minimum cosine similarity threshold" },
+    { name: "organism", type: "string", "default": "Humans", description: "Organism filter for results", "enum": ["Humans", "Rodents", "All organisms", "Manual Entry"] }
+  ];
+
+  // Original paper example - https://doi.org/10.1038/s41596-024-01136-2
+  var EXAMPLES = {
+    "1": [
+      ["mzspec:gnps:GNPS-LIBRARY:accession:CCMSLIB00006582001", "Phe-CA"],
+      ["mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00010010601", "Phe-C4:0"],
+      ["mzspec:GNPS:GNPS-LIBRARY:accession:CCMSLIB00011434738", "His-C4:0"]
+    ],
+    // HIV related examples
+    "2": [
+      ["mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:341", "Histamine-C2:0"],
+      ["mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:1984", "N-acetylcadaverine-C2:0"],
+      ["mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:9826", "Candidate-1"],
+      ["mzspec:GNPS2:TASK-fa064fe728814f439a1cd3b72deffcd0-nf_output/clustering/spectra_reformatted.mgf:scan:839", "Candidate-2"]
+    ]
+  };
+
+  var TAXONOMY_FILTERS = {
+    "Humans": ["9606|Homo sapiens"],
+    "Rodents": ["10088|Mus", "10090|Mus musculus", "10105|Mus minutoides", "10114|Rattus", "10116|Rattus norvegicus"]
+  };
+
+  var BODY_PART_MERGE = strDict({
+    "skin of trunk": "skin", "skin of pes": "skin", "head or neck skin": "skin",
+    "axilla skin": "skin", "skin of manus": "skin", "arm skin": "skin",
+    "blood plasma": "blood", "blood serum": "blood"
+  });
+
+  // ReDU columns kept from the dump: [header in the dump, internal key, merged-table column].
+  // These are the columns download_redu.load_redu() keeps.
+  var REDU_COLS = [
+    ["filename", "fname", "filename"],
+    ["ATTRIBUTE_DatasetAccession", "dataset", "ATTRIBUTE_DatasetAccession"],
+    ["NCBITaxonomy", "tax", "NCBITaxonomy"],
+    ["UBERONBodyPartName", "body", "Body Part"],
+    ["DOIDCommonName", "disease", "Disease"],
+    ["BiologicalSex", "sex", "BiologicalSex"],
+    ["AgeInYears", "age", "AgeInYears"]
+  ];
+  var CAT_KEYS = ["dataset", "tax", "body", "disease", "sex", "age"];
+
+  // The Streamlit app offered ATTRIBUTE_SubjectGender / ATTRIBUTE_Age, but those
+  // columns are never loaded from ReDU, so only body part and disease ever showed.
+  // BiologicalSex / AgeInYears are the columns it does load.
+  var ANALYSIS_COLS = [
+    { col: "Body Part", key: "body", label: "Body part" },
+    { col: "Disease", key: "disease", label: "Disease" },
+    { col: "BiologicalSex", key: "sex", label: "Biological sex" },
+    { col: "AgeInYears", key: "age", label: "Age (years)" }
+  ];
+
+  // pandas.read_csv turns these into NaN by default; matching it keeps the
+  // counts identical to the Streamlit app's.
+  var PANDAS_NA = strDict({
+    "": 1, "#N/A": 1, "#N/A N/A": 1, "#NA": 1, "-1.#IND": 1, "-1.#QNAN": 1, "-NaN": 1, "-nan": 1,
+    "1.#IND": 1, "1.#QNAN": 1, "<NA>": 1, "N/A": 1, "NA": 1, "NULL": 1, "NaN": 1, "None": 1,
+    "n/a": 1, "nan": 1, "null": 1
+  });
+
+  var IDB_NAME = "reverse-metabolomics";
+  var IDB_STORE = "redu";
+  var IDB_KEY = "current";
+  var REDU_CACHE_VERSION = 1;
+  var REDU_MAX_AGE_DAYS = 30;       // same refresh horizon as the Streamlit app
+
+  var MERGED_PAGE = 25;
+  var URL_USI_MAX = 6000;           // longer query strings get rejected by some servers
+  var CHART_FONT = "Helvetica, Arial, sans-serif";
+  var SVGNS = "http://www.w3.org/2000/svg";
+
+  // ===================================================================
+  // Small utilities
+  // ===================================================================
+
+  function strDict(obj) {
+    var d = Object.create(null);
+    for (var k in obj) if (Object.prototype.hasOwnProperty.call(obj, k)) d[k] = obj[k];
+    return d;
+  }
+
+  function status(text, tone) {
+    var el = $("status");
+    el.textContent = text || "";
+    el.className = text ? "shown " + (tone || "info") : "";
+  }
+
+  function msg(text, tone) {
+    var d = document.createElement("div");
+    d.className = "msg " + (tone || "info");
+    d.textContent = text;
+    return d;
+  }
+
+  function setMsg(host, text, tone) {
+    clear(host);
+    if (text) host.appendChild(msg(text, tone));
+  }
+
+  function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+  function h(tag, attrs, children) {
+    var e = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      if (k === "text") e.textContent = attrs[k];
+      else if (k === "cls") e.className = attrs[k];
+      else if (attrs[k] !== null && attrs[k] !== undefined) e.setAttribute(k, attrs[k]);
+    }
+    if (children) children.forEach(function (c) {
+      if (c === null || c === undefined) return;
+      e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return e;
+  }
+
+  function fmtInt(n) { return isFinite(n) ? Math.round(n).toLocaleString() : "—"; }
+
+  // Integers print as-is; other numbers get 4 decimals (m/z, cosine) — no raw floats.
+  function fmtCell(v) {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "number") {
+      if (!isFinite(v)) return "—";
+      return v % 1 === 0 ? String(v) : v.toFixed(4);
+    }
+    return String(v);
+  }
+
+  function fmtDate(d) {
+    if (!d) return "—";
+    var dt = new Date(d);
+    return isNaN(dt) ? "—" : dt.toISOString().slice(0, 10);
+  }
+
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  // Let the browser paint progress between chunks of heavy work.
+  function yieldToUi() { return new Promise(function (r) { setTimeout(r, 0); }); }
+
+  function token(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function csvCell(v) {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "number" && !isFinite(v)) return "";
+    var s = String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  // Build CSV in pieces: the merged table can have hundreds of thousands of rows.
+  function csvBlob(header, nRows, rowFn) {
+    var parts = [header.map(csvCell).join(",") + "\n"];
+    var buf = [];
+    for (var i = 0; i < nRows; i++) {
+      buf.push(rowFn(i).map(csvCell).join(","));
+      if (buf.length === 20000) { parts.push(buf.join("\n") + "\n"); buf = []; }
+    }
+    if (buf.length) parts.push(buf.join("\n") + "\n");
+    return new Blob(parts, { type: "text/csv" });
+  }
+
+  // Downloads go through a blob URL — no server involved.
+  function download(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function downloadSvg(svg, filename) {
+    if (!svg) { status("There is no chart to download yet.", "warn"); return; }
+    var text = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
+    download(new Blob([text], { type: "image/svg+xml" }), filename);
+  }
+
+  function slug(s) { return String(s).replace(/ /g, "_").toLowerCase(); }
+
+  // Python's pathlib.PurePosixPath(p).stem, which is what the join key is built from.
+  function pathStem(p) {
+    var base = String(p).replace(/\/+$/, "");
+    base = base.slice(base.lastIndexOf("/") + 1);
+    var i = base.lastIndexOf(".");
+    return (i > 0 && i < base.length - 1) ? base.slice(0, i) : base;
+  }
+
+  // 32-bit FNV-1a; only used to bucket ReDU join keys.
+  function fnv(s) {
+    var hsh = 0x811c9dc5;
+    for (var i = 0; i < s.length; i++) {
+      hsh ^= s.charCodeAt(i);
+      hsh = Math.imul(hsh, 0x01000193);
+    }
+    return hsh >>> 0;
+  }
+
+  function uniqueInOrder(values) {
+    var seen = new Set(), out = [];
+    values.forEach(function (v) { if (!seen.has(v)) { seen.add(v); out.push(v); } });
+    return out;
+  }
+
+  // Python sorts str by code point; JS's default sort does the same for BMP text.
+  function pySort(arr) { return arr.slice().sort(); }
+
+  // ===================================================================
+  // Tooltip (shared by every chart)
+  // ===================================================================
+
+  var tip = $("tip");
+  function bindTips(container) {
+    container.addEventListener("mousemove", function (e) {
+      var t = e.target && e.target.closest ? e.target.closest("[data-tip]") : null;
+      if (!t) { tip.style.display = "none"; return; }
+      tip.textContent = t.getAttribute("data-tip");
+      tip.style.display = "block";
+      var x = e.clientX + 14, y = e.clientY + 14;
+      var r = tip.getBoundingClientRect();
+      if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - 14;
+      if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - 14;
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+    });
+    container.addEventListener("mouseleave", function () { tip.style.display = "none"; });
+  }
+
+  // ===================================================================
+  // State
+  // ===================================================================
+
+  var state = {
+    rows: [],            // editable query table: [{usi, name}]
+    exampleId: null,     // "1"/"2" while the table holds an untouched example set
+    redu: null,          // compact ReDU table (see parseRedu)
+    fasst: null,         // last search: {matches, cols, compound, filepath, params, nQueried, failed}
+    merged: null,        // {m: Int32Array(match idx), r: Int32Array(ReDU row or -1), cols, get}
+    filtered: null,      // Int32Array of merged row ids passing the organism filter
+    run: null,           // in-flight search
+    organism: DEFAULTS.organism,
+    manualTaxa: ["9606|Homo sapiens"],
+    analysisCol: "Body Part",
+    exclude: []
+  };
+
+  // ===================================================================
+  // URL parameters — same names and encodings as the Streamlit app
+  // ===================================================================
+
+  function readUrlParams() {
+    var out = {};
+    var q;
+    try { q = new URLSearchParams(window.location.search); } catch (e) { return out; }
+    function num(key, lo, hi) {
+      if (!q.has(key)) return;
+      var v = parseFloat(q.get(key));
+      if (isFinite(v) && v >= lo && v <= hi) out[key] = v;
+    }
+    if (q.get("example") === "1" || q.get("example") === "2") out.example = q.get("example");
+    if (q.has("usi")) {
+      // Streamlit double-encodes this one (quote() then the query string), so it
+      // arrives here still percent-encoded once.
+      var raw = q.get("usi");
+      try {
+        if (raw.charAt(0) !== "{") raw = decodeURIComponent(raw);
+        var obj = JSON.parse(raw);
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          out.usi = Object.keys(obj).map(function (name) { return { usi: String(obj[name]), name: name }; });
+        }
+      } catch (e) { out.usiError = true; }
+    }
+    if (q.has("database") && q.get("database")) out.database = q.get("database");
+    if (q.has("analog")) out.analog = /^(true|1|yes)$/i.test(q.get("analog"));
+    num("lower_delta", 0, 1000);
+    num("upper_delta", 0, 1000);
+    num("precursor_tol", 0.001, 1);
+    num("fragment_tol", 0.001, 1);
+    num("min_cos", 0, 1);
+    var org = q.get("organism");
+    if (org && ["Humans", "Rodents", "All organisms", "Manual Entry"].indexOf(org) >= 0) out.organism = org;
+    return out;
+  }
+
+  var urlNote = "";
+  function syncUrl() {
+    var q = new URLSearchParams();
+    urlNote = "";
+    if (state.exampleId) {
+      q.set("example", state.exampleId);
+    } else {
+      var dict = {}, any = false;
+      state.rows.forEach(function (r) {
+        var u = r.usi.trim(), n = r.name.trim();
+        if (u && n) { dict[n] = u; any = true; }
+      });
+      if (any) {
+        var enc = encodeURIComponent(JSON.stringify(dict));
+        if (enc.length <= URL_USI_MAX) q.set("usi", enc);
+        else urlNote = "The USI list is too long to fit in a link, so it was left out. Share it with Export list instead.";
+      }
+    }
+    var p = readParamsRaw();
+    if (p.database && p.database !== DEFAULTS.database) q.set("database", p.database);
+    if (p.analog) {
+      q.set("analog", "true");
+      if (isFinite(p.lower_delta)) q.set("lower_delta", String(p.lower_delta));
+      if (isFinite(p.upper_delta)) q.set("upper_delta", String(p.upper_delta));
+    }
+    if (isFinite(p.precursor_tol) && p.precursor_tol !== DEFAULTS.precursor_tol) q.set("precursor_tol", String(p.precursor_tol));
+    if (isFinite(p.fragment_tol) && p.fragment_tol !== DEFAULTS.fragment_tol) q.set("fragment_tol", String(p.fragment_tol));
+    if (isFinite(p.min_cos) && p.min_cos !== DEFAULTS.min_cos) q.set("min_cos", String(p.min_cos));
+    if (state.organism !== DEFAULTS.organism) q.set("organism", state.organism);
+    var qs = q.toString();
+    // replaceState can throw inside sandboxed frames; the URL is only a convenience.
+    try { history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : "")); } catch (e) { /* ignore */ }
+  }
+
+  var syncTimer = null;
+  function syncUrlSoon() {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncUrl, 250);
+  }
+
+  // ===================================================================
+  // USI editor
+  // ===================================================================
+
+  function setRows(rows, exampleId) {
+    state.rows = rows.length ? rows : [{ usi: "", name: "" }, { usi: "", name: "" }, { usi: "", name: "" }];
+    state.exampleId = exampleId || null;
+    renderRows();
+    syncUrlSoon();
+  }
+
+  function renderRows() {
+    var body = $("usi-rows");
+    clear(body);
+    var frag = document.createDocumentFragment();
+    state.rows.forEach(function (row, i) {
+      var tr = document.createElement("tr");
+      var u = h("input", { cls: "usi-in", value: row.usi, placeholder: "mzspec:…", spellcheck: "false", "aria-label": "USI " + (i + 1) });
+      u.value = row.usi;
+      u.setAttribute("data-i", i);
+      u.setAttribute("data-k", "usi");
+      if (row.usi.trim() && !/^mzspec:/i.test(row.usi.trim())) u.className += " bad";
+      var n = h("input", { placeholder: "Compound name", "aria-label": "Compound name " + (i + 1) });
+      n.value = row.name;
+      n.setAttribute("data-i", i);
+      n.setAttribute("data-k", "name");
+      var del = h("button", { cls: "x", title: "Remove row", "data-del": i, text: "×" });
+      tr.appendChild(h("td", { cls: "idx", text: String(i + 1) }));
+      tr.appendChild(h("td", null, [u]));
+      tr.appendChild(h("td", null, [n]));
+      tr.appendChild(h("td", { cls: "del" }, [del]));
+      frag.appendChild(tr);
+    });
+    body.appendChild(frag);
+    updateUsiCount();
+  }
+
+  function filledRows() {
+    return state.rows.filter(function (r) { return r.usi.trim() !== ""; });
+  }
+
+  function updateUsiCount() {
+    var n = filledRows().length;
+    $("usi-count").textContent = n === 1 ? "1 USI" : fmtInt(n) + " USIs";
+    updateConfigSummary();
+  }
+
+  $("usi-rows").addEventListener("input", function (e) {
+    var t = e.target;
+    var i = t.getAttribute("data-i");
+    if (i === null) return;
+    state.rows[+i][t.getAttribute("data-k")] = t.value;
+    if (t.getAttribute("data-k") === "usi") {
+      t.classList.toggle("bad", !!t.value.trim() && !/^mzspec:/i.test(t.value.trim()));
+    }
+    state.exampleId = null;
+    updateUsiCount();
+    syncUrlSoon();
+  });
+
+  $("usi-rows").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-del]") : null;
+    if (!b) return;
+    state.rows.splice(+b.getAttribute("data-del"), 1);
+    state.exampleId = null;
+    if (!state.rows.length) state.rows.push({ usi: "", name: "" });
+    renderRows();
+    syncUrlSoon();
+  });
+
+  // Splits one CSV/TSV line; handles quoted fields so names like "1,2-diol" survive.
+  function splitLine(line, delim) {
+    if (delim === "\t") return line.split("\t");
+    var out = [], cur = "", q = false;
+    for (var i = 0; i < line.length; i++) {
+      var c = line.charAt(i);
+      if (q) {
+        if (c === '"') { if (line.charAt(i + 1) === '"') { cur += '"'; i++; } else q = false; }
+        else cur += c;
+      } else if (c === '"') q = true;
+      else if (c === delim) { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+
+  // Liberal: header optional, comma or tab, comments and blank lines skipped.
+  function parseUsiList(text) {
+    var lines = text.split(/\r?\n/);
+    var rows = [], skipped = 0, usiCol = 0, nameCol = 1, headerSeen = false;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line || line.charAt(0) === "#") continue;
+      var delim = line.indexOf("\t") >= 0 ? "\t" : ",";
+      var parts = splitLine(line, delim).map(function (s) { return s.trim(); });
+      if (!headerSeen && !/^mzspec:/i.test(parts[0])) {
+        var lower = parts.map(function (s) { return s.toLowerCase(); });
+        var ui = lower.indexOf("usi");
+        if (ui >= 0) {
+          headerSeen = true;
+          usiCol = ui;
+          nameCol = -1;
+          ["compound_name", "compound name", "compound", "name"].some(function (k) {
+            var j = lower.indexOf(k);
+            if (j >= 0) { nameCol = j; return true; }
+            return false;
+          });
+          continue;
+        }
+      }
+      headerSeen = true;
+      var usi = parts[usiCol] || "";
+      if (!/^mzspec:/i.test(usi)) { skipped++; continue; }
+      rows.push({ usi: usi, name: nameCol >= 0 ? (parts[nameCol] || "") : "" });
+    }
+    return { rows: rows, skipped: skipped };
+  }
+
+  function importList(text, append, label) {
+    var parsed = parseUsiList(text);
+    if (!parsed.rows.length) {
+      status("No USIs found in " + label + ". Expected one USI (mzspec:…) per line, optionally followed by a compound name.", "err");
+      return;
+    }
+    var base = append ? filledRows() : [];
+    setRows(base.concat(parsed.rows), null);
+    $("import-panel").hidden = true;
+    status("Added " + fmtInt(parsed.rows.length) + " USIs from " + label +
+      (parsed.skipped ? " (" + parsed.skipped + " line(s) skipped because they don't start with mzspec:)" : "") + ".",
+      parsed.skipped ? "warn" : "ok");
+  }
+
+  $("import-toggle").addEventListener("click", function () {
+    $("import-panel").hidden = !$("import-panel").hidden;
+    if (!$("import-panel").hidden) $("import-text").focus();
+  });
+  $("import-replace").addEventListener("click", function () { importList($("import-text").value, false, "the pasted text"); });
+  $("import-append").addEventListener("click", function () { importList($("import-text").value, true, "the pasted text"); });
+  $("import-file-btn").addEventListener("click", function () { $("import-file").click(); });
+  $("import-file").addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () { importList(String(reader.result), false, file.name); };
+    reader.onerror = function () { status("Could not read " + file.name + ".", "err"); };
+    reader.readAsText(file);
+  });
+  $("usi-export").addEventListener("click", function () {
+    var rows = filledRows();
+    if (!rows.length) { status("The USI table is empty — nothing to export.", "warn"); return; }
+    download(csvBlob(["usi", "compound_name"], rows.length, function (i) { return [rows[i].usi.trim(), rows[i].name.trim()]; }), "usi_list.csv");
+  });
+  $("add-row").addEventListener("click", function () {
+    state.rows.push({ usi: "", name: "" });
+    renderRows();
+    var inputs = $("usi-rows").querySelectorAll("input.usi-in");
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  });
+  $("clear-rows").addEventListener("click", function () { setRows([], null); });
+  $("ex1").addEventListener("click", function () { loadExample("1"); });
+  $("ex2").addEventListener("click", function () { loadExample("2"); });
+
+  function loadExample(id) {
+    setRows(EXAMPLES[id].map(function (p) { return { usi: p[0], name: p[1] }; }), id);
+    status("Loaded example set " + id + ". Click Run FASST search to query it.", "info");
+  }
+
+  // ===================================================================
+  // Search parameters
+  // ===================================================================
+
+  function readParamsRaw() {
+    return {
+      database: $("p-database").value.trim(),
+      analog: $("p-analog").value === "Yes",
+      lower_delta: parseFloat($("p-lower").value),
+      upper_delta: parseFloat($("p-upper").value),
+      precursor_tol: parseFloat($("p-prec").value),
+      fragment_tol: parseFloat($("p-frag").value),
+      min_cos: parseFloat($("p-cos").value)
+    };
+  }
+
+  // Ranges match the Streamlit number inputs.
+  function readParams() {
+    var p = readParamsRaw();
+    var errors = [];
+    function check(id, v, lo, hi, label) {
+      var bad = !(isFinite(v) && v >= lo && v <= hi);
+      $(id).classList.toggle("bad", bad);
+      if (bad) errors.push(label + " must be between " + lo + " and " + hi);
+    }
+    $("p-database").classList.toggle("bad", !p.database);
+    if (!p.database) errors.push("choose a database");
+    check("p-prec", p.precursor_tol, 0.001, 1, "Precursor tolerance");
+    check("p-frag", p.fragment_tol, 0.001, 1, "Fragment tolerance");
+    check("p-cos", p.min_cos, 0, 1, "Cosine threshold");
+    if (p.analog) {
+      check("p-lower", p.lower_delta, 0.001, 1000, "Lower delta");
+      check("p-upper", p.upper_delta, 0.001, 1000, "Upper delta");
+    }
+    return { params: p, errors: errors };
+  }
+
+  function updateAnalogUi() {
+    var on = $("p-analog").value === "Yes";
+    Array.prototype.forEach.call(document.querySelectorAll(".analog-only"), function (el) { el.hidden = !on; });
+    $("analog-range").textContent = on ? "Range: −" + $("p-lower").value + " Da to +" + $("p-upper").value + " Da" : "";
+  }
+
+  function updateConfigSummary() {
+    var p = readParamsRaw();
+    var n = filledRows().length;
+    $("config-summary").textContent = (n === 1 ? "1 USI" : fmtInt(n) + " USIs") + " · " + (p.database || "no database") +
+      " · cosine ≥ " + (isFinite(p.min_cos) ? p.min_cos : "?") +
+      " · precursor ±" + (isFinite(p.precursor_tol) ? p.precursor_tol : "?") + " Da" +
+      (p.analog ? " · analog" : "");
+  }
+
+  ["p-database", "p-analog", "p-lower", "p-upper", "p-prec", "p-frag", "p-cos"].forEach(function (id) {
+    $(id).addEventListener("input", function () {
+      $(id).classList.remove("bad");
+      updateAnalogUi();
+      updateConfigSummary();
+      syncUrlSoon();
+    });
+  });
+
+  // ===================================================================
+  // ReDU metadata: parse the dump in the browser, cache a compact copy
+  // ===================================================================
+  //
+  // The compact table keeps one integer code per categorical column (dictionary
+  // encoded; code 0 means missing) and all file names in one string with offsets.
+  // That holds the ~1.1M ReDU rows in roughly 100 MB instead of several hundred.
+
+  function readBlob(blob) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(new Uint8Array(fr.result)); };
+      fr.onerror = function () { reject(fr.error || new Error("read failed")); };
+      fr.readAsArrayBuffer(blob);
+    });
+  }
+
+  // Plain files are read in slices so progress is exact; .gz goes through the
+  // browser's DecompressionStream.
+  function chunkSource(file, gz) {
+    if (gz) {
+      if (typeof DecompressionStream === "undefined") {
+        throw new Error("This browser can't decompress .gz files. Unzip the file first, or use a current Chrome, Firefox or Safari.");
+      }
+      var reader = file.stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+      var out = 0;
+      return {
+        next: function () {
+          return reader.read().then(function (r) {
+            if (!r.done) out += r.value.length;
+            return { done: r.done, value: r.value, label: (out / 1048576).toFixed(0) + " MB decompressed" };
+          });
+        }
+      };
+    }
+    var pos = 0, SIZE = 8 * 1048576;
+    return {
+      next: function () {
+        if (pos >= file.size) return Promise.resolve({ done: true });
+        var end = Math.min(file.size, pos + SIZE);
+        return readBlob(file.slice(pos, end)).then(function (bytes) {
+          pos = end;
+          return { done: false, value: bytes, frac: pos / file.size,
+            label: (pos / 1048576).toFixed(0) + " of " + (file.size / 1048576).toFixed(0) + " MB" };
+        });
+      }
+    };
+  }
+
+  function newReduBuilder() {
+    var cap = 1 << 20;
+    var b = { n: 0, skipped: 0, dicts: {}, maps: {}, codes: {}, fnames: [] };
+    CAT_KEYS.forEach(function (k) { b.dicts[k] = [null]; b.maps[k] = new Map(); b.codes[k] = new Uint32Array(cap); });
+    b.grow = function () {
+      cap *= 2;
+      CAT_KEYS.forEach(function (k) { var a = new Uint32Array(cap); a.set(b.codes[k]); b.codes[k] = a; });
+    };
+    b.cap = function () { return cap; };
+    return b;
+  }
+
+  function intern(b, key, v) {
+    if (v === null) return 0;
+    var m = b.maps[key];
+    var c = m.get(v);
+    if (c === undefined) { c = b.dicts[key].length; b.dicts[key].push(v); m.set(v, c); }
+    return c;
+  }
+
+  function parseReduFile(file, onProgress) {
+    return readBlob(file.slice(0, 2)).then(function (magic) {
+      var gz = magic.length === 2 && magic[0] === 0x1f && magic[1] === 0x8b;
+      var src = chunkSource(file, gz);
+      var dec = new TextDecoder("utf-8");
+      var b = newReduBuilder();
+      var carry = "";
+      var slotOf = null, maxIdx = -1;
+      var vals = new Array(REDU_COLS.length);
+
+      function header(line) {
+        var cols = line.split("\t");
+        if (cols.length < 2) throw new Error("This doesn't look like the ReDU dump: expected tab-separated columns.");
+        var where = {};
+        cols.forEach(function (c, i) { where[c.trim()] = i; });
+        var missing = REDU_COLS.filter(function (c) { return where[c[0]] === undefined; }).map(function (c) { return c[0]; });
+        if (missing.length) {
+          throw new Error("This file is missing the ReDU column(s) " + missing.join(", ") +
+            ". Use the dump from redu.gnps2.org/dump (or a compact copy exported by this app).");
+        }
+        REDU_COLS.forEach(function (c) { maxIdx = Math.max(maxIdx, where[c[0]]); });
+        slotOf = new Int8Array(maxIdx + 1).fill(-1);
+        REDU_COLS.forEach(function (c, s) { slotOf[where[c[0]]] = s; });
+      }
+
+      function setVal(f, v) {
+        var s = slotOf[f];
+        if (s >= 0) vals[s] = PANDAS_NA[v] === 1 ? null : v;
+      }
+
+      function row(line) {
+        // Only scan as far as the last column we need; the dump has ~57.
+        var start = 0, f;
+        for (f = 0; f <= maxIdx; f++) {
+          if (start > line.length) break;
+          var end = line.indexOf("\t", start);
+          if (end === -1) end = line.length;
+          setVal(f, line.substring(start, end));
+          start = end + 1;
+        }
+        if (f <= maxIdx) { b.skipped++; return; }
+        store();
+      }
+
+      function rowFields(fields) {
+        if (fields.length <= maxIdx) { b.skipped++; return; }
+        for (var f = 0; f <= maxIdx; f++) setVal(f, fields[f]);
+        store();
+      }
+
+      function store() {
+        if (b.n === b.cap()) b.grow();
+        var fname = vals[0] === null ? "" : vals[0];
+        if (fname.charAt(0) === "f" && fname.charAt(1) === ".") fname = fname.slice(2);
+        b.fnames.push(fname);
+        var r = b.n++;
+        b.codes.dataset[r] = intern(b, "dataset", vals[1] === null ? "nan" : vals[1]);
+        b.codes.tax[r] = intern(b, "tax", vals[2]);
+        b.codes.body[r] = intern(b, "body", vals[3]);
+        b.codes.disease[r] = intern(b, "disease", vals[4]);
+        b.codes.sex[r] = intern(b, "sex", vals[5]);
+        b.codes.age[r] = intern(b, "age", vals[6]);
+      }
+
+      // Parses one CSV-quoted record starting at `pos` (pandas quoting: a field that
+      // starts with " runs to the closing quote, "" is a literal quote, and newlines
+      // inside are data). Returns null when the record continues past the buffer.
+      function quotedRecordAt(text, pos, final) {
+        var fields = [], i = pos, n = text.length, cur;
+        while (true) {
+          if (i < n && text.charCodeAt(i) === 34) {
+            cur = "";
+            i++;
+            while (true) {
+              var q = text.indexOf('"', i);
+              if (q === -1) {
+                if (!final) return null;
+                cur += text.substring(i);
+                i = n;
+                break;
+              }
+              cur += text.substring(i, q);
+              if (q + 1 >= n && !final) return null;     // can't tell "" from a closing quote yet
+              if (text.charCodeAt(q + 1) === 34) { cur += '"'; i = q + 2; continue; }
+              i = q + 1;
+              break;
+            }
+            while (i < n) {                              // stray text after the closing quote
+              var cc = text.charCodeAt(i);
+              if (cc === 9 || cc === 10) break;
+              if (cc !== 13) cur += text.charAt(i);
+              i++;
+            }
+          } else {
+            var s0 = i;
+            while (i < n) {
+              var c = text.charCodeAt(i);
+              if (c === 9 || c === 10) break;
+              i++;
+            }
+            cur = text.substring(s0, i);
+            if (cur.charCodeAt(cur.length - 1) === 13) cur = cur.slice(0, -1);
+          }
+          fields.push(cur);
+          if (i >= n) return final ? { fields: fields, next: n } : null;
+          if (text.charCodeAt(i) === 10) return { fields: fields, next: i + 1 };
+          i++;                                           // tab
+        }
+      }
+
+      function lines(text, final) {
+        var start = 0, nl, nextQuote = text.indexOf('"');
+        while (true) {
+          nl = text.indexOf("\n", start);
+          if (nextQuote !== -1 && nextQuote < start) nextQuote = text.indexOf('"', start);
+          if (nextQuote !== -1 && (nl === -1 || nextQuote < nl) && slotOf) {
+            var rec = quotedRecordAt(text, start, final);
+            if (!rec) break;                 // record spans into the next chunk
+            start = rec.next;
+            rowFields(rec.fields);
+            continue;
+          }
+          if (nl === -1) break;
+          var line = text.substring(start, nl);
+          if (line.charCodeAt(line.length - 1) === 13) line = line.slice(0, -1);
+          start = nl + 1;
+          if (!line) continue;
+          if (!slotOf) header(line); else row(line);
+        }
+        carry = text.substring(start);
+        if (final && carry) {
+          if (carry.charCodeAt(carry.length - 1) === 13) carry = carry.slice(0, -1);
+          if (carry) { if (!slotOf) header(carry); else row(carry); }
+          carry = "";
+        }
+      }
+
+      function pump() {
+        return src.next().then(function (chunk) {
+          if (chunk.done) {
+            lines(carry + dec.decode(), true);
+            return finishRedu(b, file);
+          }
+          lines(carry + dec.decode(chunk.value, { stream: true }), false);
+          onProgress(chunk.frac, chunk.label + " · " + fmtInt(b.n) + " rows");
+          return yieldToUi().then(pump);
+        });
+      }
+      return pump();
+    });
+  }
+
+  function finishRedu(b, file) {
+    if (!b.n) throw new Error("No ReDU rows found in " + file.name + ".");
+    var n = b.n;
+    var codes = {};
+    CAT_KEYS.forEach(function (k) { codes[k] = b.codes[k].slice(0, n); });
+    var foff = new Uint32Array(n + 1);
+    for (var i = 0; i < n; i++) foff[i + 1] = foff[i] + b.fnames[i].length;
+    var redu = {
+      v: REDU_CACHE_VERSION, n: n, dicts: b.dicts, codes: codes,
+      fstr: b.fnames.join(""), foff: foff,
+      fileName: file.name, fileDate: file.lastModified || Date.now(), savedAt: Date.now(),
+      skipped: b.skipped
+    };
+    b.fnames = null;
+    return redu;
+  }
+
+  function reduFilename(redu, r) { return redu.fstr.substring(redu.foff[r], redu.foff[r + 1]); }
+
+  // Same key the Streamlit app joins on: "<dataset>/<file stem>".
+  function reduKey(redu, r) {
+    return redu.dicts.dataset[redu.codes.dataset[r]] + "/" + pathStem(reduFilename(redu, r));
+  }
+
+  // Hash index over join keys. Chains are built back to front so rows come out
+  // in file order, like a pandas left merge with duplicate keys.
+  function buildReduIndex(redu) {
+    var size = 1;
+    while (size < redu.n * 2) size <<= 1;
+    var head = new Int32Array(size).fill(-1);
+    var next = new Int32Array(redu.n);
+    var mask = size - 1;
+    for (var r = redu.n - 1; r >= 0; r--) {
+      var hh = fnv(reduKey(redu, r)) & mask;
+      next[r] = head[hh];
+      head[hh] = r;
+    }
+    redu.head = head;
+    redu.next = next;
+    redu.mask = mask;
+  }
+
+  function reduLookup(redu, key) {
+    var out = [];
+    for (var r = redu.head[fnv(key) & redu.mask]; r !== -1; r = redu.next[r]) {
+      if (reduKey(redu, r) === key) out.push(r);
+    }
+    return out;
+  }
+
+  // --- IndexedDB cache. Every call is guarded: private windows and blocked
+  // storage just mean the user drops the file again next time.
+  function idb() {
+    return new Promise(function (resolve, reject) {
+      var req;
+      try { req = indexedDB.open(IDB_NAME, 1); } catch (e) { reject(e); return; }
+      req.onupgradeneeded = function () { req.result.createObjectStore(IDB_STORE); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+      req.onblocked = function () { reject(new Error("storage blocked")); };
+    });
+  }
+  function idbDo(mode, fn) {
+    return idb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx, req;
+        try {
+          tx = db.transaction(IDB_STORE, mode);
+          req = fn(tx.objectStore(IDB_STORE));
+        } catch (e) { db.close(); reject(e); return; }
+        tx.oncomplete = function () { db.close(); resolve(req ? req.result : undefined); };
+        tx.onerror = tx.onabort = function () { db.close(); reject(tx.error || new Error("storage error")); };
+      });
+    });
+  }
+  function saveRedu(redu) {
+    var copy = {};
+    ["v", "n", "dicts", "codes", "fstr", "foff", "fileName", "fileDate", "savedAt"].forEach(function (k) { copy[k] = redu[k]; });
+    return idbDo("readwrite", function (s) { return s.put(copy, IDB_KEY); });
+  }
+  function loadSavedRedu() { return idbDo("readonly", function (s) { return s.get(IDB_KEY); }); }
+  function forgetSavedRedu() { return idbDo("readwrite", function (s) { return s["delete"](IDB_KEY); }); }
+
+  function reduAgeDays(redu) { return (Date.now() - redu.fileDate) / 86400000; }
+
+  function showReduProgress(frac, label) {
+    $("redu-progress").hidden = false;
+    $("redu-bar").style.width = (frac === undefined ? 100 : Math.round(frac * 100)) + "%";
+    $("redu-progress-label").textContent = label || "";
+  }
+
+  function renderReduCard() {
+    var redu = state.redu;
+    $("redu-progress").hidden = true;
+    $("redu-loaded").hidden = !redu;
+    $("redu-drop-area").hidden = !!redu;
+    $("redu-step").className = redu ? "step done" : "step";
+    $("redu-head-note").textContent = redu ? (redu.cached ? "restored from this browser" : "loaded") : "required for the analysis";
+    if (!redu) return;
+    $("redu-n").textContent = fmtInt(redu.n);
+    $("redu-date").textContent = fmtDate(redu.fileDate);
+    $("redu-src").textContent = redu.fileName;
+    $("redu-src").title = "Saved in this browser on " + fmtDate(redu.savedAt);
+  }
+
+  function acceptRedu(redu, cached) {
+    redu.cached = cached;
+    buildReduIndex(redu);
+    state.redu = redu;
+    state.merged = null;
+    taxaOptionsBuilt = false;
+    reduCountCache = {};
+    renderReduCard();
+    refreshAfterData();
+  }
+
+  function readReduFile(file) {
+    if (!file) return;
+    if (state.reduBusy) { status("Already reading a ReDU file — wait for it to finish.", "warn"); return; }
+    state.reduBusy = true;
+    status("Reading ReDU metadata from " + file.name + "… This takes a little while for the full dump.", "info");
+    showReduProgress(0, "starting…");
+    var t0 = Date.now();
+    var chain;
+    try { chain = parseReduFile(file, showReduProgress); } catch (e) { chain = Promise.reject(e); }
+    chain.then(function (redu) {
+      showReduProgress(1, "indexing " + fmtInt(redu.n) + " rows…");
+      return yieldToUi().then(function () {
+        acceptRedu(redu, false);
+        var secs = ((Date.now() - t0) / 1000).toFixed(1);
+        var note = "Loaded " + fmtInt(redu.n) + " ReDU rows from " + file.name + " in " + secs + " s" +
+          (redu.skipped ? " (" + fmtInt(redu.skipped) + " malformed line(s) skipped)" : "") + ".";
+        status(note + " Saving a compact copy in this browser…", "ok");
+        return saveRedu(redu).then(function () {
+          status(note + " A compact copy is saved in this browser for next time.", redu.skipped ? "warn" : "ok");
+        }, function (err) {
+          status(note + " Couldn't save a copy in this browser (" + (err && err.message || "storage unavailable") +
+            "), so you'll need to drop the file again next visit.", "warn");
+        });
+      });
+    }).catch(function (err) {
+      renderReduCard();
+      status("Couldn't read " + file.name + ": " + (err && err.message ? err.message : err), "err");
+    }).then(function () { state.reduBusy = false; });
+  }
+
+  var drop = $("drop");
+  ["dragenter", "dragover"].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); e.stopPropagation();
+      drop.classList.add("over");
+    });
+  });
+  ["dragleave", "drop"].forEach(function (evt) {
+    drop.addEventListener(evt, function (e) {
+      e.preventDefault(); e.stopPropagation();
+      if (evt === "dragleave" && drop.contains(e.relatedTarget)) return;
+      drop.classList.remove("over");
+    });
+  });
+  drop.addEventListener("drop", function (e) { readReduFile(e.dataTransfer.files[0]); });
+  drop.addEventListener("click", function (e) {
+    if (e.target.closest && e.target.closest("a")) return;   // the dump link opens normally
+    $("redu-input").click();
+  });
+  drop.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("redu-input").click(); }
+  });
+  $("redu-input").addEventListener("change", function (e) {
+    readReduFile(e.target.files[0]);
+    e.target.value = "";      // let the same file be re-picked
+  });
+  $("redu-replace").addEventListener("click", function () { $("redu-input").click(); });
+  $("redu-forget").addEventListener("click", function () {
+    forgetSavedRedu().then(function () {
+      status("Removed the saved ReDU copy from this browser. The one loaded now stays until you leave the page.", "ok");
+    }, function (err) {
+      status("Couldn't remove the saved copy: " + (err && err.message || err), "err");
+    });
+  });
+
+  // A 7-column copy is ~1/50th the size of the dump and loads through the same path.
+  $("redu-export").addEventListener("click", function () {
+    var redu = state.redu;
+    if (!redu) return;
+    status("Building the compact copy…", "info");
+    setTimeout(function () {
+      var parts = [REDU_COLS.map(function (c) { return c[0]; }).join("\t") + "\n"];
+      var buf = [];
+      var d = redu.dicts, c = redu.codes;
+      function v(key, r) { var x = d[key][c[key][r]]; return x === null ? "" : x; }
+      for (var r = 0; r < redu.n; r++) {
+        buf.push(reduFilename(redu, r) + "\t" + v("dataset", r) + "\t" + v("tax", r) + "\t" + v("body", r) + "\t" +
+          v("disease", r) + "\t" + v("sex", r) + "\t" + v("age", r));
+        if (buf.length === 50000) { parts.push(buf.join("\n") + "\n"); buf = []; }
+      }
+      if (buf.length) parts.push(buf.join("\n") + "\n");
+      var blob = new Blob(parts, { type: "text/tab-separated-values" });
+      var stamp = fmtDate(redu.fileDate);
+      if (typeof CompressionStream === "undefined") {
+        download(blob, "redu_compact_" + stamp + ".tsv");
+        status("Exported an uncompressed compact copy (this browser can't gzip).", "ok");
+        return;
+      }
+      new Response(blob.stream().pipeThrough(new CompressionStream("gzip"))).blob().then(function (gz) {
+        download(gz, "redu_compact_" + stamp + ".tsv.gz");
+        status("Exported a compact ReDU copy (" + (gz.size / 1048576).toFixed(1) + " MB). Drop it into step 1 on any browser.", "ok");
+      }, function (err) {
+        status("Couldn't compress the compact copy: " + (err && err.message || err), "err");
+      });
+    }, 20);
+  });
+
+  // ===================================================================
+  // Network helpers
+  // ===================================================================
+
+  function onGnps2() { return /(^|\.)gnps2\.org$/.test(window.location.hostname); }
+
+  function fetchResp(url, opts, what) {
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, FETCH_TIMEOUT_MS) : null;
+    var o = opts || {};
+    if (ctl) o.signal = ctl.signal;
+    return fetch(url, o).then(function (resp) {
+      clearTimeout(timer);
+      if (!resp.ok) {
+        return resp.text()["catch"](function () { return ""; }).then(function (t) {
+          throw new Error(what + " answered HTTP " + resp.status + (t ? " (" + t.slice(0, 160) + ")" : ""));
+        });
+      }
+      return resp;
+    }, function (err) {
+      clearTimeout(timer);
+      if (err && err.name === "AbortError") throw new Error(what + " didn't answer within " + (FETCH_TIMEOUT_MS / 1000) + " s");
+      // A CORS refusal and a dead network look identical from script.
+      throw new Error("couldn't reach " + what + (onGnps2() ? " (network problem or the service is down)"
+        : " — it only answers pages served from gnps2.org, so open this app from apps.gnps2.org"));
+    });
+  }
+  function fetchJson(url, opts, what) {
+    return fetchResp(url, opts, what).then(function (r) {
+      return r.json()["catch"](function () { throw new Error(what + " sent a response that isn't JSON"); });
+    });
+  }
+  function fetchText(url, what) { return fetchResp(url, null, what).then(function (r) { return r.text(); }); }
+
+  // ===================================================================
+  // FASST search (port of masst_client.masst_query_all)
+  // ===================================================================
+
+  function fasstSearch(usi, p, run) {
+    var body = {
+      library: p.database, usi: usi, analog: p.analog ? "Yes" : "No",
+      lower_delta: p.analog ? p.lower_delta : null, upper_delta: p.analog ? p.upper_delta : null,
+      pm_tolerance: p.precursor_tol, fragment_tolerance: p.fragment_tol, cosine_threshold: p.min_cos
+    };
+    function poll(id, tries) {
+      if (run.cancelled) return Promise.reject(new Error("cancelled"));
+      if (tries >= FASST_POLL_MAX) return Promise.reject(new Error("timed out waiting for FASST results"));
+      return fetchJson(FASST_HOST + "/search/result/" + encodeURIComponent(id), null, "FASST").then(function (payload) {
+        var isObj = payload && typeof payload === "object" && !Array.isArray(payload);
+        if (isObj && FASST_IN_FLIGHT[payload.status] === 1) {
+          return delay(FASST_POLL_MS).then(function () { return poll(id, tries + 1); });
+        }
+        if (!isObj || !Array.isArray(payload.results)) {
+          throw new Error("FASST finished without results" + (isObj && payload.status ? " (status " + payload.status + ")" : ""));
+        }
+        return payload.results;
+      });
+    }
+    return fetchJson(FASST_HOST + "/search", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }, "FASST").then(function (resp) {
+      if (!resp || !resp.id) throw new Error("FASST didn't return a task id");
+      return poll(resp.id, 0);
+    });
+  }
+
+  function setPill(i, cls, text) {
+    var row = $("run-list").children[i];
+    if (!row) return;
+    var pill = row.querySelector(".pill");
+    pill.className = "pill " + cls;
+    pill.textContent = text;
+    pill.title = text;
+  }
+
+  function updateRunProgress(run) {
+    $("run-bar").style.width = Math.round(run.done / run.total * 100) + "%";
+    $("run-label").textContent = run.done + " of " + run.total + " USIs finished" +
+      (run.failedCount ? " · " + run.failedCount + " failed" : "") +
+      " · " + fmtInt(run.matchCount) + " matches so far";
+  }
+
+  function runSearch() {
+    if (state.run) return;
+    var rows = filledRows().map(function (r) { return { usi: r.usi.trim(), name: r.name.trim() }; });
+    if (!rows.length) { status("Please add at least one USI to query.", "err"); return; }
+    var chk = readParams();
+    if (chk.errors.length) { status("Check the search parameters: " + chk.errors.join("; ") + ".", "err"); return; }
+    var good = rows.filter(function (r) { return /^mzspec:/i.test(r.usi); });
+    var badCount = rows.length - good.length;
+    if (!good.length) { status("None of the USIs start with mzspec: — check the table.", "err"); return; }
+
+    // usi -> compound name; like dict(zip(...)) the last row wins. Rows without
+    // a name are labelled by their USI so they stay distinguishable in charts.
+    var nameOf = new Map(), unnamed = 0;
+    good.forEach(function (r) { if (!r.name) unnamed++; nameOf.set(r.usi, r.name || r.usi); });
+    var usis = uniqueInOrder(good.map(function (r) { return r.usi; }));
+    var p = chk.params;
+    var run = { cancelled: false, done: 0, total: usis.length, results: new Array(usis.length),
+      errors: new Array(usis.length), failedCount: 0, matchCount: 0, t0: Date.now() };
+    state.run = run;
+
+    $("run").disabled = true;
+    $("cancel").hidden = false;
+    $("run-progress").hidden = false;
+    var list = $("run-list");
+    clear(list);
+    usis.forEach(function (u) {
+      list.appendChild(h("div", null, [
+        h("span", { cls: "nm", text: nameOf.get(u), title: nameOf.get(u) }),
+        h("span", { cls: "u", text: u, title: u }),
+        h("span", { cls: "pill", text: "queued" })
+      ]));
+    });
+    updateRunProgress(run);
+    status("Searching " + usis.length + " USI" + (usis.length === 1 ? "" : "s") + " against " + p.database + "…", "info");
+
+    var next = 0;
+    function worker() {
+      if (run.cancelled || next >= usis.length) return Promise.resolve();
+      var i = next++;
+      setPill(i, "running", "searching…");
+      return fasstSearch(usis[i], p, run).then(function (res) {
+        run.results[i] = res;
+        run.matchCount += res.length;
+        setPill(i, "done", fmtInt(res.length) + " matches");
+      }, function (err) {
+        run.errors[i] = err.message;
+        run.failedCount++;
+        setPill(i, "failed", run.cancelled ? "cancelled" : err.message);
+      }).then(function () {
+        run.done++;
+        updateRunProgress(run);
+        return worker();
+      });
+    }
+    var workers = [];
+    for (var k = 0; k < Math.min(FASST_PARALLEL, usis.length); k++) workers.push(worker());
+    Promise.all(workers).then(function () {
+      finishSearch(run, usis, nameOf, p, { bad: badCount, dups: good.length - usis.length, unnamed: unnamed });
+    });
+  }
+
+  function matchFilepath(rec) {
+    var part = String(rec.USI === undefined || rec.USI === null ? "" : rec.USI).split(":")[2] || "";
+    return String(rec.Dataset) + "/" + pathStem(part);
+  }
+
+  function finishSearch(run, usis, nameOf, p, notes) {
+    state.run = null;
+    $("run").disabled = false;
+    $("cancel").hidden = true;
+    usis.forEach(function (u, i) {
+      if (!run.results[i] && !run.errors[i]) setPill(i, "failed", "skipped");
+    });
+
+    var matches = [], compound = [], filepath = [], cols = [], seen = new Set(), ok = 0, firstErr = "";
+    usis.forEach(function (usi, i) {
+      var res = run.results[i];
+      if (!res) { if (!firstErr && run.errors[i]) firstErr = run.errors[i]; return; }
+      ok++;
+      var name = nameOf.get(usi);
+      for (var j = 0; j < res.length; j++) {
+        var rec = res[j];
+        if (j < 50) for (var key in rec) if (!seen.has(key)) { seen.add(key); cols.push(key); }
+        rec.query_usi = usi;
+        matches.push(rec);
+        compound.push(name);
+        filepath.push(matchFilepath(rec));
+      }
+      if (!seen.has("query_usi")) { seen.add("query_usi"); cols.push("query_usi"); }
+    });
+
+    var secs = ((Date.now() - run.t0) / 1000).toFixed(0);
+    var extra = [];
+    if (notes.bad) extra.push(notes.bad + " row(s) skipped because the USI doesn't start with mzspec:");
+    if (notes.dups) extra.push(notes.dups + " duplicate USI(s) searched once");
+    if (notes.unnamed) extra.push(notes.unnamed + " USI(s) without a compound name are labelled by their USI");
+    var extraText = extra.length ? " Note: " + extra.join("; ") + "." : "";
+
+    if (!ok) {
+      status((run.cancelled ? "Search cancelled before any USI finished." :
+        "The FASST search failed for every USI: " + firstErr + ". Please try again in a few minutes.") + extraText,
+        run.cancelled ? "warn" : "err");
+      return;
+    }
+    state.fasst = { matches: matches, compound: compound, filepath: filepath, cols: cols, params: p,
+      nQueried: ok, nFailed: usis.length - ok };
+    state.merged = null;
+
+    var failedText = usis.length - ok ? " " + (usis.length - ok) + " USI(s) " + (run.cancelled ? "were cancelled or " : "") +
+      "failed — see the list in the search configuration." : "";
+    if (!matches.length) {
+      status("FASST returned no matches. Check the USIs, or try again later if the FASST service is busy." + failedText + extraText, "warn");
+    } else {
+      status("Searched " + ok + " USI" + (ok === 1 ? "" : "s") + " against " + p.database + " in " + secs + " s: " +
+        fmtInt(matches.length) + " matches." + failedText + extraText, failedText || extraText ? "warn" : "ok");
+    }
+    $("config-step").className = "step done";
+    if (matches.length) $("config").open = false;
+    refreshAfterData();
+    if (matches.length) {
+      var target = state.redu ? $("results") : $("need-redu");
+      if (target.scrollIntoView) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  $("run").addEventListener("click", runSearch);
+  $("cancel").addEventListener("click", function () {
+    if (!state.run) return;
+    state.run.cancelled = true;
+    status("Cancelling… searches already in flight stop at their next check.", "warn");
+  });
+
+  // ===================================================================
+  // Merge FASST matches with ReDU (port of load_and_merge_data)
+  // ===================================================================
+
+  function buildMerged() {
+    var f = state.fasst, redu = state.redu, tol = f.params.precursor_tol;
+    var mi = [], ri = [], cache = new Map();
+    for (var i = 0; i < f.matches.length; i++) {
+      var raw = f.matches[i]["Delta Mass"];
+      var dm = typeof raw === "number" ? raw : parseFloat(raw);
+      if (!(dm >= -tol && dm <= tol)) continue;
+      var key = f.filepath[i];
+      var hits = cache.get(key);
+      if (!hits) { hits = reduLookup(redu, key); cache.set(key, hits); }
+      if (!hits.length) { mi.push(i); ri.push(-1); }
+      else for (var j = 0; j < hits.length; j++) { mi.push(i); ri.push(hits[j]); }
+    }
+    var M = { m: Int32Array.from(mi), r: Int32Array.from(ri) };
+    M.cols = f.cols.concat(["Compound", "filepath"]).concat(REDU_COLS.map(function (c) { return c[2]; }));
+    M.get = makeGetters(M);
+    state.merged = M;
+  }
+
+  function makeGetters(M) {
+    var f = state.fasst, redu = state.redu, g = {};
+    f.cols.forEach(function (c) {
+      g[c] = function (k) { var v = f.matches[M.m[k]][c]; return v === undefined ? null : v; };
+    });
+    g.Compound = function (k) { return f.compound[M.m[k]]; };
+    g.filepath = function (k) { return f.filepath[M.m[k]]; };
+    g.filename = function (k) { var r = M.r[k]; return r < 0 ? null : reduFilename(redu, r); };
+    REDU_COLS.slice(1).forEach(function (spec) {
+      var dict = redu.dicts[spec[1]], codes = redu.codes[spec[1]];
+      g[spec[2]] = spec[1] === "body" ? function (k) {
+        var r = M.r[k];
+        if (r < 0) return null;
+        var v = dict[codes[r]];
+        return v !== null && BODY_PART_MERGE[v] !== undefined ? BODY_PART_MERGE[v] : v;
+      } : function (k) {
+        var r = M.r[k];
+        return r < 0 ? null : dict[codes[r]];
+      };
+    });
+    return g;
+  }
+
+  // ===================================================================
+  // Analysis
+  // ===================================================================
+
+  var reduCountCache = {};
+  var taxaOptionsBuilt = false;
+
+  function organismTaxa() {
+    if (state.organism === "All organisms") return null;
+    if (state.organism === "Manual Entry") return state.manualTaxa;
+    return TAXONOMY_FILTERS[state.organism];
+  }
+
+  function taxMask(list) {
+    var redu = state.redu;
+    if (!redu.taxIndex) {
+      redu.taxIndex = new Map();
+      redu.dicts.tax.forEach(function (t, i) { if (t !== null) redu.taxIndex.set(t, i); });
+    }
+    var mask = new Uint8Array(redu.dicts.tax.length);
+    list.forEach(function (t) { var i = redu.taxIndex.get(t); if (i !== undefined) mask[i] = 1; });
+    return mask;
+  }
+
+  // value_counts() of a ReDU column within the organism filter. Note this uses
+  // ReDU's own body-part names (the skin/blood merge only touches the matches),
+  // exactly as the Streamlit app normalizes.
+  function reduCounts(key) {
+    var ck = state.orgKey + "|" + key;
+    if (reduCountCache[ck]) return reduCountCache[ck];
+    var redu = state.redu, codes = redu.codes[key], dict = redu.dicts[key], tc = redu.codes.tax;
+    var mask = state.taxMaskCur, cnt = new Float64Array(dict.length);
+    for (var r = 0; r < redu.n; r++) {
+      if (mask && !mask[tc[r]]) continue;
+      cnt[codes[r]]++;
+    }
+    var m = new Map();
+    for (var c = 1; c < dict.length; c++) if (cnt[c]) m.set(dict[c], cnt[c]);
+    reduCountCache[ck] = m;
+    return m;
+  }
+
+  function analysisSpec() {
+    for (var i = 0; i < ANALYSIS_COLS.length; i++) if (ANALYSIS_COLS[i].col === state.analysisCol) return ANALYSIS_COLS[i];
+    return ANALYSIS_COLS[0];
+  }
+
+  function refreshAfterData() {
+    var f = state.fasst;
+    if (!f) { $("results").hidden = true; $("need-redu").hidden = true; return; }
+    if (!state.redu) {
+      $("results").hidden = true;
+      $("need-redu").hidden = false;
+      $("need-redu-text").textContent = "FASST found " + fmtInt(f.matches.length) + " matches for " + f.nQueried +
+        " USI" + (f.nQueried === 1 ? "" : "s") + ". Load the ReDU metadata in step 1 to see which samples, body parts and diseases they come from.";
+      return;
+    }
+    $("need-redu").hidden = true;
+    if (!state.merged) {
+      var t0 = performance.now();
+      buildMerged();
+      state.mergeSecs = (performance.now() - t0) / 1000;
+    }
+    $("results").hidden = false;
+    if (!taxaOptionsBuilt) {
+      taxaPicker.setOptions(pySort(state.redu.dicts.tax.filter(function (t) { return t !== null; })));
+      taxaOptionsBuilt = true;
+    }
+    analyze();
+  }
+
+  function analyze() {
+    var M = state.merged, redu = state.redu, list = organismTaxa();
+    var out, mask = null;
+    if (!list) {
+      out = new Int32Array(M.m.length);
+      for (var i = 0; i < out.length; i++) out[i] = i;
+    } else {
+      mask = taxMask(list);
+      var tc = redu.codes.tax, tmp = [];
+      for (var k = 0; k < M.m.length; k++) {
+        var r = M.r[k];
+        if (r >= 0 && mask[tc[r]]) tmp.push(k);
+      }
+      out = Int32Array.from(tmp);
+    }
+    state.filtered = out;
+    state.taxMaskCur = mask;
+    state.orgKey = list ? list.slice().sort().join("\u0001") : "*";
+
+    $("manual-taxa-field").hidden = state.organism !== "Manual Entry";
+    taxaPicker.renderChips();
+
+    // Exclusion options: the analysis column's values, in order of appearance.
+    var get = M.get[state.analysisCol], seen = new Set(), opts = [];
+    for (var j = 0; j < out.length; j++) {
+      var v = get(out[j]);
+      if (v !== null && !seen.has(v)) { seen.add(v); opts.push(v); }
+    }
+    state.exclude = state.exclude.filter(function (x) { return seen.has(x); });
+    excludePicker.setOptions(opts);
+    excludePicker.renderChips();
+
+    var label = state.organism === "Manual Entry" ? (list.length ? list.join(", ") : "no taxa selected") : state.organism;
+    var info = $("filter-info");
+    if (!out.length) {
+      info.className = "msg warn";
+      info.textContent = "No data available for the selected organism filter: " + label +
+        ". Try selecting 'All organisms' or a different filter.";
+    } else {
+      info.className = "msg info";
+      info.textContent = "Filtered data: " + fmtInt(out.length) + " spectral matches for " + label + "." +
+        (state.mergeSecs !== undefined ? " Data merged in " + state.mergeSecs.toFixed(2) + " s." : "");
+    }
+
+    renderCounts();
+    renderMainChart();
+    renderDatasetsControls();
+    renderDatasets();
+    renderMerged();
+    renderDetailsSelect();
+  }
+
+  // --- chip pickers (manual taxa, exclusions) --------------------------
+  function makePicker(inputId, listId, chipsId, getValues, setValues) {
+    var input = $(inputId), opts = new Set();
+    function tryAdd() {
+      var v = input.value;
+      if (!opts.has(v) || getValues().indexOf(v) >= 0) return;
+      input.value = "";
+      setValues(getValues().concat([v]));
+    }
+    input.addEventListener("change", tryAdd);
+    input.addEventListener("input", function (e) {
+      if (!e.inputType || e.inputType === "insertReplacementText") tryAdd();   // picked from the list
+    });
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); tryAdd(); } });
+    $(chipsId).addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest("[data-v]") : null;
+      if (!b) return;
+      var v = b.getAttribute("data-v");
+      setValues(getValues().filter(function (x) { return x !== v; }));
+    });
+    return {
+      setOptions: function (arr) {
+        opts = new Set(arr);
+        var dl = $(listId), frag = document.createDocumentFragment();
+        clear(dl);
+        arr.forEach(function (v) { var o = document.createElement("option"); o.value = v; frag.appendChild(o); });
+        dl.appendChild(frag);
+      },
+      renderChips: function () {
+        var host = $(chipsId);
+        clear(host);
+        getValues().forEach(function (v) {
+          host.appendChild(h("span", { cls: "chip" }, [v, h("button", { "data-v": v, title: "Remove " + v, text: "×" })]));
+        });
+      }
+    };
+  }
+
+  var taxaPicker = makePicker("f-taxa", "taxa-list", "taxa-chips",
+    function () { return state.manualTaxa; },
+    function (vals) { state.manualTaxa = vals; analyze(); });
+  var excludePicker = makePicker("f-exclude", "exclude-list", "exclude-chips",
+    function () { return state.exclude; },
+    function (vals) { state.exclude = vals; excludePicker.renderChips(); renderMainChart(); });
+
+  $("f-organism").addEventListener("change", function () {
+    state.organism = this.value;
+    syncUrlSoon();
+    analyze();
+  });
+  $("f-column").addEventListener("change", function () {
+    state.analysisCol = this.value;
+    state.exclude = [];
+    analyze();
+  });
+
+  // ===================================================================
+  // Tables
+  // ===================================================================
+
+  function cmpValues(a, b) {
+    var an = a === null || a === undefined || (typeof a === "number" && isNaN(a));
+    var bn = b === null || b === undefined || (typeof b === "number" && isNaN(b));
+    if (an || bn) return an === bn ? 0 : (an ? 1 : -1);
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    a = String(a); b = String(b);
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }
+
+  // Sortable, paginated table. Rows are opaque; each column knows how to read one.
+  function makeTable(host, opts) {
+    var t = { rows: [], cols: [], sortCol: -1, dir: 1, page: 0, order: null };
+    host.addEventListener("click", function (e) {
+      var td = e.target.closest ? e.target.closest("td.clamp") : null;
+      if (td) td.classList.toggle("open");
+    });
+    function computeOrder() {
+      var n = t.rows.length, idx = new Array(n), i;
+      for (i = 0; i < n; i++) idx[i] = i;
+      if (t.sortCol >= 0) {
+        var c = t.cols[t.sortCol], keys = new Array(n);
+        for (i = 0; i < n; i++) keys[i] = c.value(t.rows[i]);
+        idx.sort(function (a, b) {
+          var aNull = keys[a] === null || keys[a] === undefined, bNull = keys[b] === null || keys[b] === undefined;
+          if (aNull !== bNull) return aNull ? 1 : -1;      // missing values last either way
+          return cmpValues(keys[a], keys[b]) * t.dir || a - b;
+        });
+      }
+      t.order = idx;
+    }
+    function draw() {
+      clear(host);
+      var n = t.rows.length;
+      if (!n) { host.appendChild(h("p", { cls: "muted", text: opts.empty || "No rows." })); return; }
+      if (!t.order) computeOrder();
+      var table = h("table", { cls: "data" }), trh = h("tr");
+      t.cols.forEach(function (c, j) {
+        var th = h("th", { title: c.help || (c.sortable === false ? null : "Click to sort"), text: c.label });
+        if (c.num) th.style.textAlign = "right";
+        if (j === t.sortCol) th.appendChild(h("span", { cls: "arrow", text: t.dir === 1 ? " ▲" : " ▼" }));
+        if (c.sortable !== false) {
+          th.addEventListener("click", function () {
+            if (t.sortCol === j) t.dir = -t.dir;
+            else { t.sortCol = j; t.dir = c.num ? -1 : 1; }
+            t.order = null;
+            t.page = 0;
+            draw();
+          });
+        } else th.style.cursor = "default";
+        trh.appendChild(th);
+      });
+      table.appendChild(h("thead", null, [trh]));
+      var size = opts.pageSize, pages = Math.ceil(n / size);
+      if (t.page >= pages) t.page = pages - 1;
+      var start = t.page * size, end = Math.min(n, start + size);
+      var tbody = document.createElement("tbody");
+      for (var p = start; p < end; p++) {
+        var row = t.rows[t.order[p]], tr = document.createElement("tr");
+        for (var j = 0; j < t.cols.length; j++) {
+          var c = t.cols[j], td = document.createElement("td"), v = c.value(row);
+          if (c.render) c.render(td, v, row);
+          else if (v === null || v === undefined) { td.textContent = c.nullText || ""; td.className = "null"; }
+          else {
+            td.textContent = fmtCell(v);
+            if (c.cls === "clamp" || c.cls === "cut") td.title = String(v);
+          }
+          if (c.num) td.className += " num";
+          if (c.cls) td.className += " " + c.cls;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.appendChild(table);
+      if (pages > 1) {
+        var prev = h("button", { cls: "secondary small", text: "← Previous" });
+        var nxt = h("button", { cls: "secondary small", text: "Next →" });
+        prev.disabled = t.page === 0;
+        nxt.disabled = t.page >= pages - 1;
+        prev.addEventListener("click", function () { t.page--; draw(); });
+        nxt.addEventListener("click", function () { t.page++; draw(); });
+        host.appendChild(h("div", { cls: "pager" }, [
+          "Rows " + fmtInt(start + 1) + "–" + fmtInt(end) + " of " + fmtInt(n) + " · page " + (t.page + 1) + " of " + fmtInt(pages),
+          prev, nxt
+        ]));
+      }
+    }
+    return {
+      set: function (cols, rows) {
+        var sameCols = t.cols.length === cols.length && t.cols.every(function (c, i) { return c.label === cols[i].label; });
+        if (!sameCols) t.sortCol = -1;
+        t.cols = cols; t.rows = rows; t.page = 0; t.order = null;
+        draw();
+      }
+    };
+  }
+
+  // --- counts table (port of analyze_counts) ----------------------------
+  var countsTable = makeTable($("counts-host"), { pageSize: 200, empty: "No data for the current filters." });
+  var countsData = [];
+
+  function renderCounts() {
+    var M = state.merged, rows = state.filtered, col = state.analysisCol;
+    var get = M.get[col], getC = M.get.Compound, getD = M.get.ATTRIBUTE_DatasetAccession;
+    var groups = new Map(), order = [];
+    for (var i = 0; i < rows.length; i++) {
+      var k = rows[i], v = get(k), g = groups.get(v);
+      if (!g) { g = { v: v, n: 0, comp: new Set(), ds: new Set() }; groups.set(v, g); order.push(g); }
+      g.n++;
+      g.comp.add(getC(k));
+      var d = getD(k);
+      g.ds.add(d === null ? "nan" : String(d));
+    }
+    countsData = order.map(function (g) {
+      return [g.v, g.n, g.comp.size, Array.from(g.comp).join(", "), Array.from(g.ds).join("; ")];
+    });
+    $("counts-title").textContent = "Counts by " + col;
+    $("dl-counts").disabled = !countsData.length;
+    countsTable.set([
+      { label: col, value: function (r) { return r[0]; }, nullText: "(no ReDU metadata)" },
+      { label: "Counts_fastMASST", num: true, value: function (r) { return r[1]; } },
+      { label: "Compounds", num: true, value: function (r) { return r[2]; } },
+      { label: "CompoundsList", cls: "clamp", value: function (r) { return r[3]; }, help: "Click a cell to expand it" },
+      { label: "DatasetAccessions", cls: "clamp", value: function (r) { return r[4]; }, help: "Click a cell to expand it" }
+    ], countsData);
+  }
+
+  $("dl-counts").addEventListener("click", function () {
+    var col = state.analysisCol;
+    download(csvBlob([col, "Counts_fastMASST", "Compounds", "CompoundsList", "DatasetAccessions"], countsData.length,
+      function (i) { return countsData[i]; }), "counts_" + col + ".csv");
+  });
+
+  // --- merged dataset preview ---------------------------------------------
+  var mergedTable = makeTable($("merged-host"), { pageSize: MERGED_PAGE, empty: "No data available to display." });
+
+  function mirrorUrl(q, u) {
+    return "https://metabolomics-usi.gnps2.org/dashinterface/?usi1=" + encodeURIComponent(q) + "&usi2=" + encodeURIComponent(u);
+  }
+
+  function renderMerged() {
+    var M = state.merged, rows = state.filtered;
+    var cols = M.cols.map(function (c) {
+      var get = M.get[c], num = false;
+      for (var i = 0; i < Math.min(rows.length, 200); i++) {
+        var v = get(rows[i]);
+        if (v !== null) { num = typeof v === "number"; break; }
+      }
+      return { label: c, num: num, cls: num ? "" : "cut", value: get };
+    });
+    cols.splice(1, 0, {
+      label: "Mirror Plot", help: "Click to view mirror plot comparison", sortable: false,
+      value: function () { return null; },
+      render: function (td, v, k) {
+        td.appendChild(h("a", { href: mirrorUrl(M.get.query_usi(k), M.get.USI(k)), target: "_blank", rel: "noopener", text: "View" }));
+      }
+    });
+    $("dl-merged").disabled = !rows.length;
+    mergedTable.set(cols, rows);
+  }
+
+  $("dl-merged").addEventListener("click", function () {
+    var M = state.merged, rows = state.filtered, getters = M.cols.map(function (c) { return M.get[c]; });
+    download(csvBlob(M.cols, rows.length, function (i) {
+      var k = rows[i];
+      return getters.map(function (g) { return g(k); });
+    }), "merged_dataset.csv");
+  });
+
+  // ===================================================================
+  // SVG chart primitives
+  // ===================================================================
+
+  var measureCtx = document.createElement("canvas").getContext("2d");
+  function textW(s, size, bold) {
+    measureCtx.font = (bold ? "bold " : "") + size + "px " + CHART_FONT;
+    return measureCtx.measureText(String(s)).width;
+  }
+  function maxTextW(list, size) {
+    var m = 0;
+    for (var i = 0; i < list.length; i++) m = Math.max(m, textW(list[i], size));
+    return m;
+  }
+  function fitText(s, maxW, size) {
+    s = String(s);
+    if (textW(s, size) <= maxW) return s;
+    var lo = 0, hi = s.length;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (textW(s.slice(0, mid) + "…", size) <= maxW) lo = mid; else hi = mid - 1;
+    }
+    return s.slice(0, lo) + "…";
+  }
+  function S(tag, attrs, text) {
+    var e = document.createElementNS(SVGNS, tag);
+    if (attrs) for (var k in attrs) if (attrs[k] !== null && attrs[k] !== undefined) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function r2(x) { return Math.round(x * 100) / 100; }
+
+  // Axis ticks on 1/2/5 steps; `top` is the first tick at or above hi.
+  function niceScale(lo, hi, count) {
+    if (!(hi > lo)) hi = lo + 1;
+    var raw = (hi - lo) / count;
+    var step = Math.pow(10, Math.floor(Math.log10(raw)));
+    var m = raw / step;
+    step *= m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
+    var t0 = Math.floor(lo / step + 1e-9) * step, ticks = [];
+    for (var t = t0; t < hi + step - 1e-9; t += step) ticks.push(+t.toFixed(10));
+    return { ticks: ticks, lo: ticks[0], top: ticks[ticks.length - 1], step: step };
+  }
+  function fmtTick(v, step) {
+    var d = step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(step)));
+    return v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+
+  function hexRgb(hex) {
+    var s = hex.replace("#", "");
+    if (s.length === 3) s = s.charAt(0) + s.charAt(0) + s.charAt(1) + s.charAt(1) + s.charAt(2) + s.charAt(2);
+    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+  }
+  // Linear RGB interpolation through three evenly spaced stops, like
+  // matplotlib's LinearSegmentedColormap.from_list.
+  function makeCmap(stops) {
+    var rgb = stops.map(hexRgb);
+    return function (t) {
+      t = Math.max(0, Math.min(1, t));
+      var seg = t < 0.5 ? 0 : 1, u = (t - seg * 0.5) * 2, a = rgb[seg], b = rgb[seg + 1];
+      return "rgb(" + Math.round(a[0] + (b[0] - a[0]) * u) + "," + Math.round(a[1] + (b[1] - a[1]) * u) + "," + Math.round(a[2] + (b[2] - a[2]) * u) + ")";
+    };
+  }
+
+  var gradSeq = 0;
+
+  // ===================================================================
+  // Hierarchical clustering (scipy linkage(method="complete") + dendrogram)
+  // ===================================================================
+
+  // Same definitions as scipy.spatial.distance.
+  var METRICS = {
+    braycurtis: function (u, v) {
+      var num = 0, den = 0;
+      for (var i = 0; i < u.length; i++) { num += Math.abs(u[i] - v[i]); den += Math.abs(u[i] + v[i]); }
+      return num / den;
+    },
+    canberra: function (u, v) {
+      var s = 0;
+      for (var i = 0; i < u.length; i++) {
+        var d = Math.abs(u[i]) + Math.abs(v[i]);
+        if (d) s += Math.abs(u[i] - v[i]) / d;
+      }
+      return s;
+    },
+    correlation: function (u, v) { return cosineLike(u, v, true); },
+    cosine: function (u, v) { return cosineLike(u, v, false); },
+    euclidean: function (u, v) { return Math.sqrt(METRICS.sqeuclidean(u, v)); },
+    sqeuclidean: function (u, v) {
+      var s = 0;
+      for (var i = 0; i < u.length; i++) { var d = u[i] - v[i]; s += d * d; }
+      return s;
+    },
+    cityblock: function (u, v) {
+      var s = 0;
+      for (var i = 0; i < u.length; i++) s += Math.abs(u[i] - v[i]);
+      return s;
+    },
+    chebyshev: function (u, v) {
+      var s = 0;
+      for (var i = 0; i < u.length; i++) s = Math.max(s, Math.abs(u[i] - v[i]));
+      return s;
+    },
+    // scipy's pdist reads counts as presence/absence for Jaccard.
+    jaccard: function (u, v) {
+      var a = 0, b = 0;
+      for (var i = 0; i < u.length; i++) {
+        var pu = u[i] !== 0, pv = v[i] !== 0;
+        if (pu || pv) { b++; if (pu !== pv) a++; }
+      }
+      return b ? a / b : 0;
+    },
+    hamming: function (u, v) {
+      var a = 0;
+      for (var i = 0; i < u.length; i++) if (u[i] !== v[i]) a++;
+      return a / u.length;
+    }
+  };
+  // Follows scipy's arithmetic order exactly (numpy pairwise-summed mean, then
+  // 1 - dot / (|u|*|v|)). Profiles that differ by a constant factor are common
+  // here, and a 1-ulp difference is enough to flip a tie in the dendrogram.
+  function npSum(a) {
+    function part(off, n) {
+      var i, res;
+      if (n < 8) { res = -0; for (i = 0; i < n; i++) res += a[off + i]; return res; }
+      if (n <= 128) {
+        var r = [a[off], a[off + 1], a[off + 2], a[off + 3], a[off + 4], a[off + 5], a[off + 6], a[off + 7]];
+        for (i = 8; i < n - (n % 8); i += 8) for (var j = 0; j < 8; j++) r[j] += a[off + i + j];
+        res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        for (; i < n; i++) res += a[off + i];
+        return res;
+      }
+      var n2 = Math.floor(n / 2);
+      n2 -= n2 % 8;
+      return part(off, n2) + part(off + n2, n - n2);
+    }
+    return part(0, a.length);
+  }
+  function cosineLike(u, v, centered) {
+    var n = u.length, i;
+    if (centered) {
+      var mu = npSum(u) / n, mv = npSum(v) / n, cu = new Array(n), cv = new Array(n);
+      for (i = 0; i < n; i++) { cu[i] = u[i] - mu; cv[i] = v[i] - mv; }
+      u = cu; v = cv;
+    }
+    var uv = 0, uu = 0, vv = 0;
+    for (i = 0; i < n; i++) { uv += u[i] * v[i]; uu += u[i] * u[i]; vv += v[i] * v[i]; }
+    var c = uv / (Math.sqrt(uu) * Math.sqrt(vv));
+    if (Math.abs(c) > 1) c = c > 0 ? 1 : -1;
+    return 1 - c;
+  }
+
+  function linkage(X, metric) {
+    var n = X.length, dist = METRICS[metric] || METRICS.euclidean;
+    var D = new Float64Array(n * n), bad = 0, maxD = 0, i, j, k;
+    for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) {
+      var d = dist(X[i], X[j]);
+      if (!isFinite(d)) { bad++; d = NaN; } else if (d > maxD) maxD = d;
+      D[i * n + j] = D[j * n + i] = d;
+    }
+    // scipy refuses non-finite distances outright; filling them lets clustering
+    // run, and the caller tells the user it happened.
+    if (bad) for (i = 0; i < n * n; i++) if (isNaN(D[i])) D[i] = maxD > 0 ? maxD : 1;
+
+    // Nearest-neighbour chain, step for step as scipy's nn_chain does it, so ties
+    // between equal distances resolve the same way and the leaf order matches.
+    var size0 = new Int32Array(n).fill(1), chain = new Int32Array(n), clen = 0, merges = [];
+    for (var step = 0; step < n - 1; step++) {
+      if (clen === 0) {
+        for (i = 0; i < n; i++) if (size0[i] > 0) { chain[0] = i; clen = 1; break; }
+      }
+      var x, y, cur;
+      while (true) {
+        x = chain[clen - 1];
+        if (clen > 1) { y = chain[clen - 2]; cur = D[x * n + y]; } else { y = -1; cur = Infinity; }
+        for (i = 0; i < n; i++) {
+          if (size0[i] === 0 || i === x) continue;
+          if (D[x * n + i] < cur) { cur = D[x * n + i]; y = i; }
+        }
+        if (clen > 1 && y === chain[clen - 2]) break;
+        chain[clen++] = y;
+      }
+      clen -= 2;
+      if (x > y) { var sw = x; x = y; y = sw; }
+      merges.push([x, y, cur, step]);
+      size0[y] += size0[x];
+      size0[x] = 0;
+      for (k = 0; k < n; k++) {
+        if (size0[k] === 0 || k === y) continue;
+        D[k * n + y] = D[y * n + k] = Math.max(D[k * n + x], D[k * n + y]);   // complete linkage
+      }
+    }
+    merges.sort(function (a, b) { return a[2] - b[2] || a[3] - b[3]; });
+
+    // Relabel like scipy's hierarchy.label: union-find, smaller root first. This
+    // fixes left/right children and therefore the dendrogram's leaf order.
+    var total = 2 * n - 1, parent = new Int32Array(total), size = new Int32Array(total);
+    for (i = 0; i < total; i++) { parent[i] = i; size[i] = i < n ? 1 : 0; }
+    function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+    var Z = merges.map(function (mg, t) {
+      var x = find(mg[0]), y = find(mg[1]), id = n + t;
+      parent[x] = id; parent[y] = id;
+      size[id] = size[x] + size[y];
+      return [Math.min(x, y), Math.max(x, y), mg[2], size[id]];
+    });
+
+    var order = [], stack = [total - 1];
+    while (stack.length) {
+      var node = stack.pop();
+      if (node < n) order.push(node);
+      else { stack.push(Z[node - n][1]); stack.push(Z[node - n][0]); }
+    }
+    var pos = new Float64Array(total), height = new Float64Array(total);
+    order.forEach(function (leaf, p) { pos[leaf] = p; });
+    Z.forEach(function (z, t) { pos[n + t] = (pos[z[0]] + pos[z[1]]) / 2; height[n + t] = z[2]; });
+    return { Z: Z, n: n, order: order, pos: pos, height: height, nonFinite: bad };
+  }
+
+  // ===================================================================
+  // Heatmap (port of create_heatmap / sns.clustermap)
+  // ===================================================================
+
+  function pivotTable(rows, col, reduMap, log) {
+    var M = state.merged, get = M.get[col], getC = M.get.Compound;
+    var counts = new Map(), comps = new Set(), i;
+    for (i = 0; i < rows.length; i++) {
+      var k = rows[i], v = get(k);
+      if (v === null) continue;
+      var c = getC(k);
+      comps.add(c);
+      var m = counts.get(v);
+      if (!m) { m = new Map(); counts.set(v, m); }
+      m.set(c, (m.get(c) || 0) + 1);
+    }
+    var rowNames = pySort(Array.from(counts.keys())), colNames = pySort(Array.from(comps));
+    var X = rowNames.map(function (r) {
+      var m = counts.get(r);
+      return colNames.map(function (c) { return m.get(c) || 0; });
+    });
+    if (reduMap) {
+      // Divide by ReDU sample counts, then express each compound as % of its column.
+      X = X.map(function (row, ri) {
+        var d = reduMap.get(rowNames[ri]);
+        return row.map(function (x) { return d ? x / d : NaN; });
+      });
+      colNames.forEach(function (c, j) {
+        var s = 0;
+        X.forEach(function (row) { if (!isNaN(row[j])) s += row[j]; });
+        if (s > 0) X.forEach(function (row) { row[j] = row[j] / s * 100; });
+      });
+    }
+    if (log) X = X.map(function (row) { return row.map(function (x) { return Math.log2(x + 1); }); });
+    return { rows: rowNames, cols: colNames, X: X };
+  }
+
+  function drawHeatmap(pv, o) {
+    var nR = pv.rows.length, nC = pv.cols.length, X = pv.X, notes = [], i, j;
+    var anyNaN = X.some(function (r) { return r.some(function (x) { return isNaN(x); }); });
+    var X0 = X.map(function (r) { return r.map(function (x) { return isNaN(x) ? 0 : x; }); });
+    var rowT = null, colT = null;
+    if (o.rowCluster) {
+      if (nR < 2) notes.push("There is only one row, so rows weren't clustered.");
+      else rowT = linkage(X0, o.metric);
+    }
+    if (o.colCluster) {
+      if (nC < 2) notes.push("There is only one compound column, so columns weren't clustered.");
+      else colT = linkage(X0[0].map(function (_, jj) { return X0.map(function (r) { return r[jj]; }); }), o.metric);
+    }
+    [rowT, colT].forEach(function (t, w) {
+      if (t && t.nonFinite) notes.push(fmtInt(t.nonFinite) + " " + (w ? "column" : "row") + " distance(s) were undefined for this metric " +
+        "(for example, constant or all-zero profiles) and were set to the largest distance so clustering could run.");
+    });
+    if (anyNaN && (rowT || colT)) notes.push("Cells without a ReDU sample count were treated as 0 for clustering.");
+    var rOrd = rowT ? rowT.order : X.map(function (_, ii) { return ii; });
+    var cOrd = colT ? colT.order : pv.cols.map(function (_, jj) { return jj; });
+
+    var vmin = Infinity, vmax = -Infinity;
+    X.forEach(function (r) { r.forEach(function (x) { if (isFinite(x)) { vmin = Math.min(vmin, x); vmax = Math.max(vmax, x); } }); });
+    if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
+    if (vmax === vmin) vmax = vmin + 1;
+    var sc = niceScale(vmin, vmax, 5);
+    var cticks = sc.ticks.filter(function (t) { return t >= vmin - 1e-9 && t <= vmax + 1e-9; });
+
+    var F = 11, PAD = 10, titleH = 30, cbarW = 14, cbarGap = 22;
+    var dendW = rowT ? 70 : 0, dendH = colT ? 60 : 0;
+    var tickLabW = maxTextW(cticks.map(function (t) { return fmtTick(t, sc.step); }), 10) + 6;
+    var rightW = cbarGap + cbarW + 6 + tickLabW + 24;
+    var rowLabelW = Math.min(260, maxTextW(pv.rows, F)) + 8;
+    var colLabelH = Math.min(220, maxTextW(pv.cols, F)) + 10;
+    var cellW, cellH;
+    if (o.custom) {
+      // Width/height are the whole figure in inches, as with matplotlib's figsize.
+      cellW = Math.max(2, (o.wIn * 96 - 2 * PAD - rowLabelW - dendW - rightW) / nC);
+      cellH = Math.max(2, (o.hIn * 96 - 2 * PAD - titleH - dendH - colLabelH) / nR);
+    } else {
+      // Fill the card when there are few compounds, without letting cells get silly.
+      var room = (o.availW || 900) - 2 * PAD - rowLabelW - dendW - rightW;
+      cellW = Math.max(22, Math.min(110, Math.floor(Math.min(room, 640) / nC)));
+      cellH = nR <= 30 ? 26 : (nR <= 60 ? 18 : 14);
+    }
+    var rowFont = Math.max(5, Math.min(F, cellH * 0.85)), colFont = Math.max(5, Math.min(F, cellW * 0.85));
+    rowLabelW = Math.min(260, maxTextW(pv.rows, rowFont)) + 8;
+    colLabelH = Math.min(220, maxTextW(pv.cols, colFont)) + 10;
+
+    var gx = PAD + rowLabelW + dendW, gy = PAD + titleH + dendH, gw = cellW * nC, gh = cellH * nR;
+    var W = Math.ceil(gx + gw + rightW + PAD), H = Math.ceil(gy + gh + colLabelH + PAD);
+    var ink = token("--ink"), muted = token("--muted"), white = token("--card");
+    var cmap = makeCmap([token("--hm-lo"), token("--hm-mid"), token("--hm-hi")]);
+    var svg = S("svg", { width: W, height: H, viewBox: "0 0 " + W + " " + H, "font-family": CHART_FONT,
+      role: "img", "aria-label": "Heatmap of spectral matches by " + o.title + " and compound" });
+    svg.appendChild(S("rect", { x: 0, y: 0, width: W, height: H, fill: white }));
+    svg.appendChild(S("text", { x: r2(gx + gw / 2), y: PAD + 18, "text-anchor": "middle", "font-size": 14, "font-weight": "bold", fill: ink }, o.title));
+
+    var cells = S("g", { stroke: white, "stroke-width": cellW > 4 && cellH > 4 ? 0.5 : 0 });
+    for (i = 0; i < nR; i++) for (j = 0; j < nC; j++) {
+      var v = X[rOrd[i]][cOrd[j]];
+      cells.appendChild(S("rect", {
+        x: r2(gx + j * cellW), y: r2(gy + i * cellH), width: r2(cellW), height: r2(cellH),
+        fill: isNaN(v) ? token("--hm-nan") : cmap((v - vmin) / (vmax - vmin)),
+        "data-tip": pv.rows[rOrd[i]] + "\n" + pv.cols[cOrd[j]] + ": " + (isNaN(v) ? "no ReDU sample count" : o.fmt(v))
+      }));
+    }
+    svg.appendChild(cells);
+    svg.appendChild(S("line", { x1: gx, y1: r2(gy + gh), x2: r2(gx + gw), y2: r2(gy + gh), stroke: token("--frame"), "stroke-width": 1.5 }));
+    svg.appendChild(S("line", { x1: gx, y1: gy, x2: gx, y2: r2(gy + gh), stroke: token("--frame"), "stroke-width": 1.5 }));
+
+    var rl = S("g", { "font-size": r2(rowFont), fill: ink, "text-anchor": "end" });
+    for (i = 0; i < nR; i++) {
+      var full = String(pv.rows[rOrd[i]]);
+      rl.appendChild(S("text", { x: gx - dendW - 4, y: r2(gy + (i + 0.5) * cellH), dy: "0.35em", "data-tip": full }, fitText(full, 252, rowFont)));
+    }
+    svg.appendChild(rl);
+    var cl = S("g", { "font-size": r2(colFont), fill: ink, "text-anchor": "end" });
+    for (j = 0; j < nC; j++) {
+      var cx = r2(gx + (j + 0.5) * cellW), cy = r2(gy + gh + 6), fullC = String(pv.cols[cOrd[j]]);
+      cl.appendChild(S("text", { x: cx, y: cy, dy: "0.35em", transform: "rotate(-90 " + cx + " " + cy + ")", "data-tip": fullC }, fitText(fullC, 210, colFont)));
+    }
+    svg.appendChild(cl);
+
+    var dg = S("g", { fill: "none", stroke: token("--soft-ink"), "stroke-width": 1 });
+    if (rowT) {
+      var hmaxR = rowT.height[2 * nR - 2] || 1;
+      var xr = function (hh) { return r2(gx - 2 - hh / hmaxR * (dendW - 6)); };
+      var yr = function (node) { return r2(gy + (rowT.pos[node] + 0.5) * cellH); };
+      rowT.Z.forEach(function (z, t) {
+        var id = nR + t;
+        dg.appendChild(S("path", { d: "M" + xr(rowT.height[z[0]]) + "," + yr(z[0]) + "H" + xr(rowT.height[id]) +
+          "V" + yr(z[1]) + "H" + xr(rowT.height[z[1]]) }));
+      });
+    }
+    if (colT) {
+      var hmaxC = colT.height[2 * nC - 2] || 1;
+      var yc = function (hh) { return r2(gy - 2 - hh / hmaxC * (dendH - 6)); };
+      var xc = function (node) { return r2(gx + (colT.pos[node] + 0.5) * cellW); };
+      colT.Z.forEach(function (z, t) {
+        var id = nC + t;
+        dg.appendChild(S("path", { d: "M" + xc(z[0]) + "," + yc(colT.height[z[0]]) + "V" + yc(colT.height[id]) +
+          "H" + xc(z[1]) + "V" + yc(colT.height[z[1]]) }));
+      });
+    }
+    svg.appendChild(dg);
+
+    // Colorbar
+    var gid = "hm-grad-" + (++gradSeq);
+    var defs = S("defs"), grad = S("linearGradient", { id: gid, x1: 0, y1: 1, x2: 0, y2: 0 });
+    grad.appendChild(S("stop", { offset: "0", "stop-color": token("--hm-lo") }));
+    grad.appendChild(S("stop", { offset: "0.5", "stop-color": token("--hm-mid") }));
+    grad.appendChild(S("stop", { offset: "1", "stop-color": token("--hm-hi") }));
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+    var bx = gx + gw + cbarGap, bh = Math.max(Math.min(gh, 120), gh * 0.5), by = gy + (gh - bh) / 2;
+    svg.appendChild(S("rect", { x: r2(bx), y: r2(by), width: cbarW, height: r2(bh), fill: "url(#" + gid + ")", stroke: token("--line") }));
+    var tg = S("g", { "font-size": 10, fill: muted });
+    cticks.forEach(function (t) {
+      var ty = r2(by + bh - (t - vmin) / (vmax - vmin) * bh);
+      tg.appendChild(S("line", { x1: r2(bx + cbarW), y1: ty, x2: r2(bx + cbarW + 4), y2: ty, stroke: muted }));
+      tg.appendChild(S("text", { x: r2(bx + cbarW + 6), y: ty, dy: "0.35em" }, fmtTick(t, sc.step)));
+    });
+    svg.appendChild(tg);
+    var lx = r2(bx + cbarW + 6 + tickLabW + 12), ly = r2(by + bh / 2);
+    svg.appendChild(S("text", { x: lx, y: ly, "font-size": 10, fill: ink, "text-anchor": "middle",
+      transform: "rotate(-90 " + lx + " " + ly + ")" }, o.cbarLabel));
+    return { svg: svg, notes: notes };
+  }
+
+  // ===================================================================
+  // Bar charts (single-compound bar chart and dataset distribution)
+  // ===================================================================
+
+  function hbarPath(x0, y, w, th) {
+    var r = Math.min(3, th / 2, w), x1 = x0 + w;
+    return "M" + r2(x0) + "," + r2(y) + "H" + r2(x1 - r) + "Q" + r2(x1) + "," + r2(y) + " " + r2(x1) + "," + r2(y + r) +
+      "V" + r2(y + th - r) + "Q" + r2(x1) + "," + r2(y + th) + " " + r2(x1 - r) + "," + r2(y + th) + "H" + r2(x0) + "Z";
+  }
+  function vbarPath(x, y0, hh, bw) {
+    var r = Math.min(3, bw / 2, hh), yt = y0 - hh;
+    return "M" + r2(x) + "," + r2(y0) + "V" + r2(yt + r) + "Q" + r2(x) + "," + r2(yt) + " " + r2(x + r) + "," + r2(yt) +
+      "H" + r2(x + bw - r) + "Q" + r2(x + bw) + "," + r2(yt) + " " + r2(x + bw) + "," + r2(yt + r) + "V" + r2(y0) + "Z";
+  }
+
+  // o: labels, values, horizontal, color, showValues, fmtVal, title, valueLabel,
+  //    categoryLabel, width, plotH (horizontal only; null = fit to bars)
+  function drawBars(o) {
+    var n = o.labels.length, F = 11, i;
+    var vmax = 0;
+    o.values.forEach(function (v) { if (v > vmax) vmax = v; });
+    var sc = niceScale(0, vmax || 1, 6), top = sc.top;
+    var ink = token("--ink"), muted = token("--muted"), grid = token("--grid"), white = token("--card");
+    var valLabels = o.values.map(o.fmtVal);
+    var tickLabels = sc.ticks.map(function (t) { return fmtTick(t, sc.step); });
+    var svg, W, H, plotW, plotH, left, topY, band;
+
+    function frame(w, hh) {
+      svg = S("svg", { width: w, height: hh, viewBox: "0 0 " + w + " " + hh, "font-family": CHART_FONT, role: "img", "aria-label": o.title });
+      svg.appendChild(S("rect", { x: 0, y: 0, width: w, height: hh, fill: white }));
+    }
+
+    if (o.horizontal) {
+      var catW = Math.min(300, maxTextW(o.labels, F)) + 10;
+      var valW = o.showValues ? maxTextW(valLabels, 10) + 10 : 10;
+      left = 12 + 18 + catW;
+      topY = 40;
+      plotH = o.plotH || Math.max(n * 22, 44);
+      band = plotH / n;
+      plotW = Math.max(160, o.width - left - valW - 12);
+      W = Math.ceil(left + plotW + valW + 12);
+      H = Math.ceil(topY + plotH + 48);
+      frame(W, H);
+      var xs = function (v) { return left + v / top * plotW; };
+      var gg = S("g", { stroke: grid });
+      var tl = S("g", { "font-size": 10, fill: muted, "text-anchor": "middle" });
+      sc.ticks.forEach(function (t, k) {
+        gg.appendChild(S("line", { x1: r2(xs(t)), y1: topY, x2: r2(xs(t)), y2: r2(topY + plotH) }));
+        tl.appendChild(S("text", { x: r2(xs(t)), y: r2(topY + plotH + 15) }, tickLabels[k]));
+      });
+      svg.appendChild(gg);
+      svg.appendChild(tl);
+      var th = Math.max(1, Math.min(band * 0.78, 36));
+      var labelEvery = Math.max(1, Math.ceil(10 / band)), font = Math.max(7, Math.min(F, band * 0.85));
+      var bars = S("g", { fill: o.color }), cats = S("g", { "font-size": r2(font), fill: ink, "text-anchor": "end" });
+      var vals = S("g", { "font-size": 10, fill: ink });
+      for (i = 0; i < n; i++) {
+        var y = topY + i * band + (band - th) / 2, w = xs(o.values[i]) - left;
+        var tipText = o.labels[i] + ": " + valLabels[i];
+        if (w > 0) bars.appendChild(S("path", { d: hbarPath(left, y, w, th), "data-tip": tipText }));
+        // Full-row hit target so thin bars are still hoverable.
+        bars.appendChild(S("rect", { x: left, y: r2(topY + i * band), width: r2(plotW), height: r2(band), fill: "transparent", "data-tip": tipText }));
+        if (i % labelEvery === 0) {
+          cats.appendChild(S("text", { x: left - 6, y: r2(y + th / 2), dy: "0.35em", "data-tip": tipText }, fitText(o.labels[i], 296, font)));
+          if (o.showValues) vals.appendChild(S("text", { x: r2(left + w + 4), y: r2(y + th / 2), dy: "0.35em" }, valLabels[i]));
+        }
+      }
+      svg.appendChild(bars);
+      svg.appendChild(cats);
+      svg.appendChild(vals);
+      svg.appendChild(S("line", { x1: left, y1: topY, x2: left, y2: r2(topY + plotH), stroke: ink }));
+      svg.appendChild(S("text", { x: r2(left + plotW / 2), y: H - 10, "font-size": 11, fill: ink, "text-anchor": "middle" }, o.valueLabel));
+      var yl = r2(topY + plotH / 2);
+      svg.appendChild(S("text", { x: 16, y: yl, "font-size": 11, fill: ink, "text-anchor": "middle", transform: "rotate(-90 16 " + yl + ")" }, o.categoryLabel));
+      svg.appendChild(S("text", { x: r2(left + plotW / 2), y: 22, "font-size": 14, "font-weight": "bold", fill: ink, "text-anchor": "middle" }, o.title));
+      return svg;
+    }
+
+    // Vertical: category labels rotated 45° under the bars, like matplotlib's
+    // xticks(rotation=45, ha="right").
+    var catH = Math.min(220, maxTextW(o.labels, F) * 0.71 + 14);
+    left = 12 + 18 + maxTextW(tickLabels, 10) + 8;
+    topY = 40 + (o.showValues ? 14 : 0);
+    plotH = 320;
+    plotW = Math.max(o.width - left - 16, n * 18);
+    band = plotW / n;
+    W = Math.ceil(left + plotW + 16);
+    H = Math.ceil(topY + plotH + catH + 36);
+    frame(W, H);
+    var ys = function (v) { return topY + plotH - v / top * plotH; };
+    var g2 = S("g", { stroke: grid }), t2 = S("g", { "font-size": 10, fill: muted, "text-anchor": "end" });
+    sc.ticks.forEach(function (t, k) {
+      g2.appendChild(S("line", { x1: left, y1: r2(ys(t)), x2: r2(left + plotW), y2: r2(ys(t)) }));
+      t2.appendChild(S("text", { x: left - 6, y: r2(ys(t)), dy: "0.35em" }, tickLabels[k]));
+    });
+    svg.appendChild(g2);
+    svg.appendChild(t2);
+    var bw = Math.max(1, Math.min(band * 0.78, 48));
+    var vb = S("g", { fill: o.color }), vc = S("g", { "font-size": F, fill: ink, "text-anchor": "end" });
+    var vv = S("g", { "font-size": 10, fill: ink, "text-anchor": "middle" });
+    for (i = 0; i < n; i++) {
+      var x = left + i * band + (band - bw) / 2, hh = topY + plotH - ys(o.values[i]);
+      var tip2 = o.labels[i] + ": " + valLabels[i];
+      if (hh > 0) vb.appendChild(S("path", { d: vbarPath(x, topY + plotH, hh, bw), "data-tip": tip2 }));
+      vb.appendChild(S("rect", { x: r2(left + i * band), y: topY, width: r2(band), height: plotH, fill: "transparent", "data-tip": tip2 }));
+      var lx = r2(x + bw / 2), ly = r2(topY + plotH + 8);
+      vc.appendChild(S("text", { x: lx, y: ly, dy: "0.35em", transform: "rotate(-45 " + lx + " " + ly + ")", "data-tip": tip2 }, fitText(o.labels[i], 290, F)));
+      if (o.showValues && band >= 14) vv.appendChild(S("text", { x: lx, y: r2(topY + plotH - hh - 5) }, valLabels[i]));
+    }
+    svg.appendChild(vb);
+    svg.appendChild(vc);
+    svg.appendChild(vv);
+    svg.appendChild(S("line", { x1: left, y1: r2(topY + plotH), x2: r2(left + plotW), y2: r2(topY + plotH), stroke: ink }));
+    svg.appendChild(S("text", { x: r2(left + plotW / 2), y: H - 10, "font-size": 11, fill: ink, "text-anchor": "middle" }, o.categoryLabel));
+    var yl2 = r2(topY + plotH / 2);
+    svg.appendChild(S("text", { x: 16, y: yl2, "font-size": 11, fill: ink, "text-anchor": "middle", transform: "rotate(-90 16 " + yl2 + ")" }, o.valueLabel));
+    svg.appendChild(S("text", { x: r2(left + plotW / 2), y: 22, "font-size": 14, "font-weight": "bold", fill: ink, "text-anchor": "middle" }, o.title));
+    return svg;
+  }
+
+  function hostWidth(id) {
+    var w = $(id).clientWidth - 22;
+    return w > 200 ? w : 900;
+  }
+
+  // ===================================================================
+  // Main chart: heatmap for several compounds, bar chart for one
+  // ===================================================================
+
+  var chartSvg = null, chartData = null, chartSvgName = "";
+
+  function rowsAfterExclusion() {
+    var rows = state.filtered;
+    if (!state.exclude.length) return rows;
+    var ex = new Set(state.exclude), get = state.merged.get[state.analysisCol], out = [];
+    for (var i = 0; i < rows.length; i++) { var v = get(rows[i]); if (!ex.has(v)) out.push(rows[i]); }
+    return out;
+  }
+
+  function renderMainChart() {
+    var rows = state.filtered, host = $("chart-host");
+    chartSvg = null;
+    chartData = null;
+    clear(host);
+    setMsg($("chart-msg"), "");
+    var compounds = new Set(), getC = state.merged.get.Compound;
+    for (var i = 0; i < rows.length && compounds.size < 2; i++) compounds.add(getC(rows[i]));
+    var single = compounds.size === 1;
+    $("heatmap-controls").hidden = single || !rows.length;
+    $("bar-controls").hidden = !single;
+    $("chart-title").textContent = single ? "Bar chart" : "Heatmap";
+    $("chart-caption").textContent = single ? "Distribution of spectral matches for " + Array.from(compounds)[0]
+      : "Spectral matches per compound and " + analysisSpec().label.toLowerCase();
+    var ok = false;
+    if (!rows.length) {
+      setMsg($("chart-msg"), "No data available to generate a chart with the current filters.", "info");
+    } else {
+      try {
+        ok = single ? renderBar(Array.from(compounds)[0]) : renderHeatmap();
+      } catch (e) {
+        setMsg($("chart-msg"), "Error generating the " + (single ? "bar chart" : "heatmap") + ": " + (e && e.message || e), "err");
+      }
+    }
+    host.hidden = !ok;
+    $("chart-downloads").hidden = !ok;
+  }
+
+  function renderHeatmap() {
+    var col = state.analysisCol, type = $("h-type").value;
+    var log = type === "Log-transformed counts", norm = type === "ReDU-normalized counts";
+    var pv = pivotTable(rowsAfterExclusion(), col, norm ? reduCounts(analysisSpec().key) : null, log);
+    if (!pv.rows.length) {
+      setMsg($("chart-msg"), "Nothing left to plot: every match is missing a " + col + " value or was excluded.", "info");
+      return false;
+    }
+    var custom = $("h-custom").checked;
+    var wIn = parseFloat($("h-width").value), hIn = parseFloat($("h-height").value);
+    if (custom && !(wIn >= 2 && wIn <= 10 && hIn >= 4 && hIn <= 15)) {
+      setMsg($("chart-msg"), "Custom size must be 2–10 in wide and 4–15 in tall.", "err");
+      return false;
+    }
+    var res = drawHeatmap(pv, {
+      title: col, metric: $("h-metric").value,
+      rowCluster: $("h-rowclust").checked, colCluster: $("h-colclust").checked,
+      custom: custom, wIn: wIn, hIn: hIn, availW: hostWidth("chart-host"),
+      cbarLabel: log ? "log2(spectral matches)" : (norm ? "Normalized spectral matches (%)" : "Spectral matches"),
+      fmt: function (v) { return log ? v.toFixed(3) : (norm ? v.toFixed(2) + "%" : fmtInt(v)); }
+    });
+    if (res.notes.length) setMsg($("chart-msg"), res.notes.join(" "), "warn");
+    $("chart-host").appendChild(res.svg);
+    chartSvg = res.svg;
+    chartSvgName = "heatmap_" + col + "_" + slug(type) + ".svg";
+    chartData = {
+      header: [col].concat(pv.cols), n: pv.rows.length,
+      row: function (i) { return [pv.rows[i]].concat(pv.X[i]); },
+      file: "pivot_table_" + col + "_" + slug(type) + ".csv"
+    };
+    return true;
+  }
+
+  function renderBar(compound) {
+    var col = state.analysisCol, type = $("b-type").value, norm = type === "ReDU-normalized counts";
+    var rows = rowsAfterExclusion(), get = state.merged.get[col], counts = new Map(), i;
+    for (i = 0; i < rows.length; i++) {
+      var v = get(rows[i]);
+      if (v !== null) counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    var data = [];
+    var reduMap = norm ? reduCounts(analysisSpec().key) : null;
+    counts.forEach(function (n, label) {
+      if (!norm) { data.push({ label: label, Counts: n, value: n }); return; }
+      var rc = reduMap.get(label);
+      if (rc) data.push({ label: label, Counts: n, ReDU_Counts: rc, Normalized: n / rc * 100, value: n / rc * 100 });
+    });
+    if (!data.length) {
+      setMsg($("chart-msg"), "Nothing left to plot with the current filters and exclusions.", "info");
+      return false;
+    }
+    var sort = $("b-sort").value;
+    data.sort(function (a, b) {
+      if (sort === "Alphabetical") return cmpValues(a.label, b.label);
+      return sort.indexOf("Ascending") === 0 ? a.value - b.value : b.value - a.value;
+    });
+    var svg = drawBars({
+      labels: data.map(function (d) { return d.label; }), values: data.map(function (d) { return d.value; }),
+      horizontal: $("b-orient").value === "Horizontal", color: token("--accent"),
+      showValues: $("b-values").checked,
+      fmtVal: function (v) { return norm ? v.toFixed(1) + "%" : fmtInt(v); },
+      title: compound + " - Distribution by " + col,
+      valueLabel: norm ? "Normalized spectral matches (%)" : "Spectral matches",
+      categoryLabel: col, width: hostWidth("chart-host"), plotH: null
+    });
+    $("chart-host").appendChild(svg);
+    chartSvg = svg;
+    chartSvgName = "bar_chart_" + col + "_" + slug(type) + ".svg";
+    var header = norm ? [col, "Counts", "ReDU_Counts", "Normalized"] : [col, "Counts"];
+    chartData = {
+      header: header, n: data.length, file: "bar_chart_data_" + col + "_" + slug(type) + ".csv",
+      row: function (k) {
+        var d = data[k];
+        return norm ? [d.label, d.Counts, d.ReDU_Counts, d.Normalized] : [d.label, d.Counts];
+      }
+    };
+    return true;
+  }
+
+  ["h-type", "h-metric", "h-colclust", "h-rowclust", "h-width", "h-height", "b-type", "b-sort", "b-orient", "b-values"].forEach(function (id) {
+    $(id).addEventListener("change", renderMainChart);
+  });
+  $("h-custom").addEventListener("change", function () {
+    $("h-width").disabled = $("h-height").disabled = !this.checked;
+    renderMainChart();
+  });
+  $("dl-chart-data").addEventListener("click", function () {
+    if (!chartData) return;
+    download(csvBlob(chartData.header, chartData.n, chartData.row), chartData.file);
+  });
+  $("dl-chart-svg").addEventListener("click", function () { downloadSvg(chartSvg, chartSvgName); });
+
+  // ===================================================================
+  // Datasets distribution
+  // ===================================================================
+
+  var datasetsSvg = null, datasetsData = [];
+
+  function fillSelect(sel, values) {
+    var prev = sel.value;
+    clear(sel);
+    var frag = document.createDocumentFragment();
+    values.forEach(function (v) { var o = document.createElement("option"); o.value = v; o.textContent = v; frag.appendChild(o); });
+    sel.appendChild(frag);
+    sel.value = values.indexOf(prev) >= 0 ? prev : values[0];
+  }
+
+  function renderDatasetsControls() {
+    var M = state.merged, rows = state.filtered, getC = M.get.Compound, get = M.get[state.analysisCol];
+    var comps = [], seenC = new Set(), strata = new Set();
+    for (var i = 0; i < rows.length; i++) {
+      var c = getC(rows[i]);
+      if (!seenC.has(c)) { seenC.add(c); comps.push(c); }
+      var v = get(rows[i]);
+      if (v !== null) strata.add(v);
+    }
+    fillSelect($("d-compound"), ["All compounds"].concat(comps));
+    fillSelect($("d-strata"), ["All"].concat(pySort(Array.from(strata))));
+  }
+
+  function renderDatasets() {
+    var M = state.merged, rows = state.filtered, host = $("datasets-host");
+    clear(host);
+    datasetsSvg = null;
+    datasetsData = [];
+    $("d-height-val").textContent = "(" + $("d-height").value + " in)";
+    if (!rows.length) {
+      setMsg($("datasets-msg"), "No data available to generate dataset distribution chart with current filters.", "info");
+      host.hidden = true;
+      return;
+    }
+    var comp = $("d-compound").value, strata = $("d-strata").value;
+    var getC = M.get.Compound, get = M.get[state.analysisCol], getDs = M.get.Dataset;
+    var counts = new Map();
+    for (var i = 0; i < rows.length; i++) {
+      var k = rows[i];
+      if (comp !== "All compounds" && getC(k) !== comp) continue;
+      if (strata !== "All" && get(k) !== strata) continue;
+      var d = getDs(k);
+      counts.set(d, (counts.get(d) || 0) + 1);
+    }
+    counts.forEach(function (n, d) { datasetsData.push([d, n]); });
+    datasetsData.sort(function (a, b) { return b[1] - a[1]; });   // stable: ties keep first appearance
+    if (!datasetsData.length) {
+      setMsg($("datasets-msg"), "No spectral matches for this compound and stratum.", "info");
+      host.hidden = true;
+      return;
+    }
+    setMsg($("datasets-msg"), "");
+    host.hidden = false;
+    // Hundreds of datasets make an unreadable chart; the CSV always has all of them.
+    var top = +$("d-top").value, shown = top ? datasetsData.slice(0, top) : datasetsData;
+    if (shown.length < datasetsData.length) {
+      setMsg($("datasets-msg"), "Showing the top " + shown.length + " of " + fmtInt(datasetsData.length) +
+        " datasets. Choose All to plot every one; the downloaded data always includes all of them.", "info");
+    }
+    var parts = [];
+    if (comp !== "All compounds") parts.push(comp);
+    if (strata !== "All") parts.push(strata);
+    var inches = +$("d-height").value;
+    datasetsSvg = drawBars({
+      labels: shown.map(function (r) { return String(r[0]); }),
+      values: shown.map(function (r) { return r[1]; }),
+      horizontal: true, color: token("--series-2"), showValues: true, fmtVal: fmtInt,
+      title: "Spectral Matches: " + (parts.length ? parts.join(" - ") : "All Data"),
+      valueLabel: "Spectral matches for " + comp, categoryLabel: "Dataset",
+      width: hostWidth("datasets-host"),
+      plotH: $("d-auto").checked ? null : Math.max(60, inches * 72 - 88)
+    });
+    host.appendChild(datasetsSvg);
+  }
+
+  ["d-compound", "d-strata", "d-top"].forEach(function (id) { $(id).addEventListener("change", renderDatasets); });
+  $("d-height").addEventListener("input", renderDatasets);
+  $("d-auto").addEventListener("change", function () {
+    $("d-height").disabled = this.checked;
+    renderDatasets();
+  });
+  $("dl-datasets-data").addEventListener("click", function () {
+    if (!datasetsData.length) { status("There is no dataset distribution to download.", "warn"); return; }
+    download(csvBlob(["Dataset", "Counts"], datasetsData.length, function (i) { return datasetsData[i]; }), "dataset_distribution_data.csv");
+  });
+  $("dl-datasets-svg").addEventListener("click", function () { downloadSvg(datasetsSvg, "dataset_distribution_chart.svg"); });
+
+  // ===================================================================
+  // Dataset details (port of utils/retrieve_dataset_metadata.py)
+  // ===================================================================
+
+  var detailsCache = {}, detailsSeq = 0, detailsShown = null;
+
+  function detectRepo(id) {
+    var u = id.toUpperCase();
+    if (u.indexOf("MSV") === 0) return "massive";
+    if (u.indexOf("MTBLS") === 0) return "metabolights";
+    if (u.indexOf("ST") === 0) return "workbench";
+    return null;
+  }
+  var REPO_LABEL = { massive: "MassIVE", metabolights: "MetaboLights", workbench: "Metabolomics Workbench" };
+
+  // Links from repository records only become hrefs when they are web/ftp URLs.
+  function linkOrText(url, text) {
+    url = String(url || "");
+    if (/^(https?|ftp):\/\//i.test(url)) return h("a", { href: url, target: "_blank", rel: "noopener", text: text || url });
+    return document.createTextNode(text || url);
+  }
+  // MetaboLights descriptions are HTML. DOMParser builds an inert document (no
+  // scripts run, nothing loads), so taking its text is a safe way to strip tags.
+  function plainText(s) {
+    s = String(s || "");
+    if (s.indexOf("<") < 0) return s;
+    try {
+      var doc = new DOMParser().parseFromString(s.replace(/<br\s*\/?>|<\/p>/gi, "$&\n"), "text/html");
+      return (doc.body.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+    } catch (e) { return s; }
+  }
+  function list(items) { return h("ul", null, items.map(function (c) { return h("li", null, [c]); })); }
+  function para(label, value) { return h("p", null, [h("strong", { text: label + ": " }), String(value)]); }
+  function idLine(id) { return h("p", null, [h("strong", { text: "Dataset ID: " }), h("code", { text: id })]); }
+
+  function renderDetailsSelect() {
+    var M = state.merged, rows = state.filtered, getDs = M.get.Dataset, seen = new Set(), ids = [];
+    for (var i = 0; i < rows.length; i++) {
+      var d = getDs(rows[i]);
+      if (d !== null && !seen.has(d)) { seen.add(d); ids.push(String(d)); }
+    }
+    var sel = $("ds-select");
+    fillSelect(sel, ids);
+    sel.disabled = !ids.length;
+    if (sel.value !== detailsShown || !ids.length) showDatasetDetails(ids.length ? sel.value : "");
+  }
+
+  function showDatasetDetails(id) {
+    var host = $("details-host");
+    clear(host);
+    detailsShown = id;
+    var seq = ++detailsSeq;
+    if (!id) { host.appendChild(msg("No datasets available to display.", "info")); return; }
+    id = id.trim();
+    var repo = detectRepo(id);
+    if (!repo) {
+      host.appendChild(msg("Unrecognized dataset ID format: " + id + ". Supported formats: MSV* (MassIVE), MTBLS* (MetaboLights), ST* (Metabolomics Workbench).", "err"));
+      return;
+    }
+    if (repo === "massive" && !MASSIVE_ALLOWS_CORS) { renderMassiveLinks(host, id); return; }
+    host.appendChild(msg("Fetching metadata from " + REPO_LABEL[repo] + "…", "info"));
+    var p = detailsCache[id] || (detailsCache[id] = fetchDetails(repo, id));
+    p.then(function (render) {
+      if (seq !== detailsSeq) return;
+      clear(host);
+      render(host);
+      host.appendChild(h("p", { cls: "muted small", text: "Data source: " + repo.toUpperCase() }));
+    }, function (err) {
+      delete detailsCache[id];
+      if (seq !== detailsSeq) return;
+      clear(host);
+      host.appendChild(msg("Error fetching data for " + id + ": " + (err && err.message || err), "err"));
+    });
+  }
+
+  function fetchDetails(repo, id) {
+    var enc = encodeURIComponent(id);
+    if (repo === "massive") {
+      return fetchJson("https://massive.ucsd.edu/ProteoSAFe/proxi/v0.1/datasets/" + enc, null, "MassIVE")
+        .then(function (d) { return function (host) { renderMassive(host, d, id); }; });
+    }
+    if (repo === "metabolights") {
+      return fetchJson("https://www.ebi.ac.uk/metabolights/ws/studies/" + enc + "?investigation_only=true", null, "MetaboLights")
+        .then(function (d) { return function (host) { renderMetabolights(host, d, id); }; });
+    }
+    // Workbench's mwtab isn't valid JSON for some multi-analysis studies; the
+    // summary endpoint is the fallback, as in the Streamlit app.
+    var base = "https://www.metabolomicsworkbench.org/rest/study/study_id/" + enc + "/";
+    return fetchText(base + "mwtab", "Metabolomics Workbench").then(function (t) {
+      var d;
+      try { d = JSON.parse(t); } catch (e) { d = null; }
+      if (d && typeof d === "object") return function (host) { renderWorkbench(host, d, id); };
+      return fetchJson(base + "summary", null, "Metabolomics Workbench").then(function (s) {
+        return function (host) { renderWorkbenchSummary(host, s, id); };
+      });
+    });
+  }
+
+  function renderMassiveLinks(host, id) {
+    host.appendChild(h("h3", { text: id }));
+    host.appendChild(msg("MassIVE doesn't let other websites read its dataset records, so the title, summary and species can't be shown here. Open the dataset on MassIVE instead.", "warn"));
+    host.appendChild(h("h4", { text: "Dataset links" }));
+    host.appendChild(list([
+      linkOrText("https://massive.ucsd.edu/ProteoSAFe/dataset.jsp?accession=" + encodeURIComponent(id), "MassIVE dataset page"),
+      linkOrText("https://massive.ucsd.edu/ProteoSAFe/proxi/v0.1/datasets/" + encodeURIComponent(id), "Dataset record (JSON)")
+    ]));
+  }
+
+  function renderMassive(host, data, id) {
+    host.appendChild(h("h3", { text: data.title || "No title available" }));
+    host.appendChild(idLine(id));
+    host.appendChild(h("h4", { text: "Summary" }));
+    host.appendChild(h("p", { text: plainText(data.summary) || "No summary available" }));
+    host.appendChild(h("h4", { text: "Species" }));
+    var species = data.species || [];
+    if (!species.length) host.appendChild(h("p", { text: "No species information available" }));
+    species.forEach(function (group) {
+      function val(acc, dflt) {
+        for (var i = 0; i < group.length; i++) if (group[i].accession === acc) return group[i].value;
+        return dflt;
+      }
+      host.appendChild(h("p", null, [h("strong", { text: val("MS:1001469", "Unknown") }), " (NCBI TaxID: " + val("MS:1001467", "N/A") + ")"]));
+    });
+    host.appendChild(h("h4", { text: "Dataset links" }));
+    host.appendChild(list((data.datasetLink || []).filter(function (l) { return l.value; })
+      .map(function (l) { return linkOrText(l.value, l.name || "Link"); })));
+    host.appendChild(h("h4", { text: "Publications" }));
+    var pubs = data.publications || [];
+    if (!pubs.length) host.appendChild(h("p", { text: "No publications available" }));
+    else host.appendChild(list(pubs.map(function (p) { return document.createTextNode(p.value || p.name || "Unknown publication"); })));
+  }
+
+  function renderMetabolights(host, data, id) {
+    var studies = (data.isaInvestigation || {}).studies || [];
+    if (!studies.length) { host.appendChild(msg("No study information found", "err")); return; }
+    var study = studies[0], mt = data.mtblsStudy || {};
+    host.appendChild(h("h3", { text: plainText(study.title) || "No title available" }));
+    host.appendChild(idLine(id));
+    var st = mt.studyStatus || "Unknown";
+    var stEl = h("span", { text: st });
+    stEl.style.color = st === "Public" ? "var(--ok)" : "var(--warn)";
+    host.appendChild(h("p", null, [h("strong", { text: "Status: " }), stEl]));
+    host.appendChild(h("h4", { text: "Summary" }));
+    host.appendChild(h("p", { text: plainText(study.description) || "No summary available" }));
+    host.appendChild(h("h4", { text: "Species" }));
+    var found = false;
+    (study.studyDesignDescriptors || []).forEach(function (d) {
+      if (String(d.annotationValue || "").toLowerCase().indexOf("organism") >= 0) {
+        host.appendChild(h("p", null, [h("strong", { text: d.annotationValue })]));
+        found = true;
+      }
+    });
+    if (!found) {
+      (study.factors || []).some(function (f) {
+        if (String(f.factorName || "").toLowerCase().indexOf("organism") >= 0) {
+          host.appendChild(h("p", null, [h("strong", { text: f.factorName })]));
+          found = true;
+          return true;
+        }
+        return false;
+      });
+    }
+    if (!found) host.appendChild(h("p", { text: "Species information not explicitly listed" }));
+    host.appendChild(h("h4", { text: "Dataset links" }));
+    var links = [linkOrText("https://www.ebi.ac.uk/metabolights/" + encodeURIComponent(id), "MetaboLights Study Page")];
+    if (mt.studyHttpUrl) links.push(linkOrText(mt.studyHttpUrl, "FTP HTTP Access"));
+    if (mt.studyFtpUrl) links.push(linkOrText(mt.studyFtpUrl, "FTP Access"));
+    host.appendChild(list(links));
+    host.appendChild(h("h4", { text: "Publications" }));
+    var pubs = (study.studyPublications || []).filter(function (p) { return p.title || p.doi || p.pubMedID; });
+    if (!pubs.length) host.appendChild(h("p", { text: "No publications available" }));
+    else host.appendChild(list(pubs.map(function (p) {
+      if (p.doi) return linkOrText("https://doi.org/" + p.doi, p.title || p.doi);
+      if (p.pubMedID) return linkOrText("https://pubmed.ncbi.nlm.nih.gov/" + encodeURIComponent(p.pubMedID) + "/", p.title || p.pubMedID);
+      return document.createTextNode(p.title);
+    })));
+
+    var more = h("details", null, [h("summary", { text: "Additional information" })]);
+    more.appendChild(para("Submission Date", study.submissionDate || "N/A"));
+    more.appendChild(para("Public Release Date", study.publicReleaseDate || "N/A"));
+    var people = (study.people || []).filter(function (p) { return ((p.firstName || "") + (p.lastName || "")).trim(); });
+    if (people.length) {
+      more.appendChild(h("p", null, [h("strong", { text: "Contacts:" })]));
+      more.appendChild(list(people.map(function (p) {
+        var roles = (p.roles || []).map(function (r) { return r.annotationValue || ""; }).filter(Boolean);
+        var bits = [((p.firstName || "") + " " + (p.lastName || "")).trim() + (roles.length ? " (" + roles.join(", ") + ")" : "")];
+        if (p.affiliation) bits.push(p.affiliation);
+        if (p.email) bits.push(p.email);
+        return document.createTextNode(bits.join(" — "));
+      })));
+    }
+    var assays = study.assays || [];
+    if (assays.length) {
+      more.appendChild(h("p", null, [h("strong", { text: "Assays:" })]));
+      more.appendChild(list(assays.map(function (a) {
+        var m = (a.measurementType || {}).annotationValue || "Unknown";
+        var t = (a.technologyType || {}).annotationValue || "Unknown";
+        var pf = a.technologyPlatform;
+        return document.createTextNode(m + " using " + t + (pf && pf !== "N/A" ? " — Platform: " + pf : ""));
+      })));
+    }
+    host.appendChild(more);
+  }
+
+  function renderWorkbench(host, data, id) {
+    var project = data.PROJECT || {}, study = data.STUDY || {}, subject = data.SUBJECT || {}, coll = data.COLLECTION || {};
+    host.appendChild(h("h3", { text: study.STUDY_TITLE || project.PROJECT_TITLE || "No title available" }));
+    host.appendChild(idLine(id));
+    host.appendChild(h("h4", { text: "Summary" }));
+    host.appendChild(h("p", { text: plainText(study.STUDY_SUMMARY || project.PROJECT_SUMMARY) || "No summary available" }));
+    host.appendChild(h("h4", { text: "Species" }));
+    host.appendChild(h("p", null, [h("strong", { text: subject.SUBJECT_SPECIES || "Unknown" }), " (" + (subject.SUBJECT_TYPE || "Unknown") + ")"]));
+    if (subject.TAXONOMY_ID) host.appendChild(h("p", { text: "NCBI TaxID: " + subject.TAXONOMY_ID }));
+    host.appendChild(h("h4", { text: "Dataset links" }));
+    host.appendChild(list([linkOrText("https://www.metabolomicsworkbench.org/data/DRCCMetadata.php?Mode=Study&StudyID=" + encodeURIComponent(id), "Metabolomics Workbench Study Page")]));
+
+    var more = h("details", null, [h("summary", { text: "Additional information" })]);
+    more.appendChild(h("p", null, [h("strong", { text: "Study information:" })]));
+    more.appendChild(list([
+      document.createTextNode("Institute: " + (study.INSTITUTE || project.INSTITUTE || "N/A")),
+      document.createTextNode("Total Subjects: " + (study.TOTAL_SUBJECTS || "N/A")),
+      document.createTextNode("Males: " + (study.NUM_MALES || "N/A") + ", Females: " + (study.NUM_FEMALES || "N/A"))
+    ]));
+    var first = study.FIRST_NAME || project.FIRST_NAME || "", last = study.LAST_NAME || project.LAST_NAME || "";
+    var email = study.EMAIL || project.EMAIL || "";
+    var contact = [];
+    if (first || last) contact.push(document.createTextNode((first + " " + last).trim()));
+    if (email) contact.push(document.createTextNode(email));
+    if (contact.length) { more.appendChild(h("p", null, [h("strong", { text: "Contact:" })])); more.appendChild(list(contact)); }
+    var subj = [];
+    if (subject.AGE_OR_AGE_RANGE) subj.push(document.createTextNode("Age Range: " + subject.AGE_OR_AGE_RANGE));
+    if (subject.GENDER) subj.push(document.createTextNode("Gender: " + subject.GENDER));
+    if (subject.HUMAN_LIFESTYLE_FACTORS && subject.HUMAN_LIFESTYLE_FACTORS !== "NA") subj.push(document.createTextNode("Lifestyle Factors: " + subject.HUMAN_LIFESTYLE_FACTORS));
+    if (subj.length) { more.appendChild(h("p", null, [h("strong", { text: "Subject information:" })])); more.appendChild(list(subj)); }
+    var col = [];
+    if (coll.SAMPLE_TYPE) col.push(document.createTextNode("Sample Type: " + coll.SAMPLE_TYPE));
+    if (coll.COLLECTION_LOCATION) col.push(document.createTextNode("Collection Location: " + coll.COLLECTION_LOCATION));
+    if (coll.STORAGE_CONDITIONS) col.push(document.createTextNode("Storage Conditions: " + coll.STORAGE_CONDITIONS));
+    if (col.length) { more.appendChild(h("p", null, [h("strong", { text: "Sample collection:" })])); more.appendChild(list(col)); }
+    host.appendChild(more);
+  }
+
+  function renderWorkbenchSummary(host, d, id) {
+    host.appendChild(h("h3", { text: d.study_title || "Summary information" }));
+    host.appendChild(idLine(id));
+    host.appendChild(para("Species", d.species || "N/A"));
+    host.appendChild(para("Institute", d.institute || "N/A"));
+    host.appendChild(para("Analysis Type", d.analysis_type || "N/A"));
+    host.appendChild(para("Number of Samples", d.number_of_samples || "N/A"));
+    host.appendChild(list([linkOrText("https://www.metabolomicsworkbench.org/data/DRCCMetadata.php?StudyID=" + encodeURIComponent(id), "Metabolomics Workbench link")]));
+  }
+
+  $("ds-select").addEventListener("change", function () { showDatasetDetails(this.value); });
+
+  // ===================================================================
+  // Reset, share link, resize
+  // ===================================================================
+
+  function applyParams(u) {
+    $("p-database").value = u.database || DEFAULTS.database;
+    $("p-analog").value = u.analog ? "Yes" : "No";
+    $("p-lower").value = u.lower_delta !== undefined ? u.lower_delta : DEFAULTS.lower_delta;
+    $("p-upper").value = u.upper_delta !== undefined ? u.upper_delta : DEFAULTS.upper_delta;
+    $("p-prec").value = u.precursor_tol !== undefined ? u.precursor_tol : DEFAULTS.precursor_tol;
+    $("p-frag").value = u.fragment_tol !== undefined ? u.fragment_tol : DEFAULTS.fragment_tol;
+    $("p-cos").value = u.min_cos !== undefined ? u.min_cos : DEFAULTS.min_cos;
+    ["p-database", "p-lower", "p-upper", "p-prec", "p-frag", "p-cos"].forEach(function (id) { $(id).classList.remove("bad"); });
+    updateAnalogUi();
+    updateConfigSummary();
+  }
+
+  $("reset").addEventListener("click", function () {
+    if (state.run) { status("Cancel the running search first.", "warn"); return; }
+    if ((filledRows().length || state.fasst) &&
+        !window.confirm("Start a new query? This clears the USI table, the search parameters and the current results.")) return;
+    state.fasst = null;
+    state.merged = null;
+    state.filtered = null;
+    state.organism = DEFAULTS.organism;
+    state.manualTaxa = ["9606|Homo sapiens"];
+    state.exclude = [];
+    $("f-organism").value = state.organism;
+    applyParams({});
+    setRows([], null);
+    $("run-progress").hidden = true;
+    $("config").open = true;
+    $("config-step").className = "step";
+    refreshAfterData();
+    status("", "");
+  });
+
+  $("copy-link").addEventListener("click", function () {
+    syncUrl();
+    var url = window.location.href;
+    function done() { status("Link copied to the clipboard." + (urlNote ? " " + urlNote : ""), urlNote ? "warn" : "ok"); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done, function () { window.prompt("Copy this link:", url); });
+    } else window.prompt("Copy this link:", url);
+  });
+
+  var lastWidth = window.innerWidth, resizeTimer = null;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (Math.abs(window.innerWidth - lastWidth) < 40) return;
+      lastWidth = window.innerWidth;
+      if (!$("results").hidden && state.filtered) { renderMainChart(); renderDatasets(); }
+    }, 200);
+  });
+
+  bindTips($("chart-host"));
+  bindTips($("datasets-host"));
+
+  // ===================================================================
+  // Start-up
+  // ===================================================================
+
+  (function init() {
+    var dl = $("db-list");
+    DATABASES.slice().sort().forEach(function (d) { var o = document.createElement("option"); o.value = d; dl.appendChild(o); });
+    ANALYSIS_COLS.forEach(function (c) {
+      var o = document.createElement("option");
+      o.value = c.col;
+      o.textContent = c.label;
+      $("f-column").appendChild(o);
+    });
+    $("f-column").value = state.analysisCol;
+    $("api-schema").textContent = JSON.stringify(PARAM_SCHEMA, null, 2);
+    $("app-version").textContent = APP_VERSION;
+
+    var u = readUrlParams();
+    applyParams(u);
+    state.organism = u.organism || DEFAULTS.organism;
+    $("f-organism").value = state.organism;
+    if (u.example) setRows(EXAMPLES[u.example].map(function (p) { return { usi: p[0], name: p[1] }; }), u.example);
+    else if (u.usi && u.usi.length) setRows(u.usi, null);
+    else setRows([], null);
+    if (u.usiError) status("The usi parameter in this link couldn't be read, so the USI table starts empty.", "warn");
+    else if (u.example || (u.usi && u.usi.length)) status("Loaded the query from the link. Click Run FASST search when ready.", "info");
+
+    renderReduCard();
+    $("redu-head-note").textContent = "checking this browser for a saved copy…";
+    loadSavedRedu().then(function (saved) {
+      if (!saved || saved.v !== REDU_CACHE_VERSION || !saved.n || state.redu) { renderReduCard(); return; }
+      $("redu-head-note").textContent = "restoring the saved copy…";
+      return yieldToUi().then(function () {
+        if (state.redu) return;      // a file was dropped meanwhile
+        acceptRedu(saved, true);
+        var age = reduAgeDays(saved);
+        if (age > REDU_MAX_AGE_DAYS) {
+          status("Using the ReDU copy saved in this browser, dated " + fmtDate(saved.fileDate) + " (" + Math.floor(age) +
+            " days old). ReDU grows constantly, so consider loading a fresh dump.", "warn");
+        } else if (!$("status").textContent) {
+          status("Using the ReDU metadata saved in this browser (" + fmtInt(saved.n) + " files, dated " + fmtDate(saved.fileDate) + ").", "ok");
+        }
+      });
+    })["catch"](function () { renderReduCard(); });
+  })();
+})();
+</script>
+</body>
+</html>

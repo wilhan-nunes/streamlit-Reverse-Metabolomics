@@ -35,6 +35,37 @@ this does not make the tool usable offline: it works entirely from USIs
 looking up ReDU metadata both require an internet connection regardless of
 where the app runs.
 
+## Browser edition
+
+[`browser_app/reverse_metabolomics.html`](browser_app/reverse_metabolomics.html)
+is a single-file version of the app that does all of its analysis in the web
+browser. It has no build step and needs no Python, and it is meant for the
+GNPS2 web apps site (apps.gnps2.org). It shows every figure and table the
+Streamlit app does, with a few additions:
+
+- **No limit on the number of USIs** (the Streamlit app allows 20).
+- **ReDU metadata stays on your machine.** You drop the dump from
+  [redu.gnps2.org/dump](https://redu.gnps2.org/dump) into the page once, and
+  a compact copy is kept in your browser for later visits.
+- **Biological sex and age** are available as analysis variables, alongside
+  body part and disease.
+- **Collapsible search configuration**, and USI lists can be imported or
+  exported as CSV/TSV.
+
+It uses the same URL parameters as the Streamlit app, so shared links work in
+both. FASST only accepts requests from pages served on `*.gnps2.org`, so test
+it from the apps.gnps2.org sandbox rather than opening the file locally.
+
+### Versioning and changelog
+
+The browser edition has its own version, a release date (`YYYY-MM-DD`) like
+the Streamlit app's. The version is set in one place, the
+`<meta name="version">` tag in the HTML file, and the page footer reads it
+from there. Every change is recorded in
+**[browser_app/CHANGELOG.md](browser_app/CHANGELOG.md)**. To release a change,
+move the changelog's *Unreleased* entries under a new dated heading and set
+the same date in the meta tag.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -46,6 +77,8 @@ where the app runs.
 | `utils/` | Query-parameter API and dataset metadata helpers |
 | `run_local.py` | Entry point for running the app locally via `uv` |
 | `Dockerfile`, `docker-compose*.yml`, `Makefile` | Server deployment |
+| `browser_app/reverse_metabolomics.html` | Browser edition: the whole app in one HTML file |
+| `browser_app/CHANGELOG.md` | Version history of the browser edition |
 | `tests/` | Automated tests, including external-service health checks |
 | `README_API_Params.md` | URL query-parameter configuration reference |
 | `RUNNING_LOCALLY.md` | Local setup instructions |
