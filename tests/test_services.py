@@ -24,6 +24,7 @@ TIMEOUT = 20
 # ---------------------------------------------------------------------------
 
 class TestMassiveService:
+    SERVICE = "MassIVE (massive.ucsd.edu)"
     URL = f"https://massive.ucsd.edu/ProteoSAFe/proxi/v0.1/datasets/{MASSIVE_ID}"
 
     def test_endpoint_reachable(self):
@@ -52,6 +53,7 @@ class TestMassiveService:
 # ---------------------------------------------------------------------------
 
 class TestMetaboLightsService:
+    SERVICE = "MetaboLights (ebi.ac.uk)"
     URL = f"https://www.ebi.ac.uk:443/metabolights/ws/studies/{METABOLIGHTS_ID}?investigation_only=true"
 
     def test_endpoint_reachable(self):
@@ -80,6 +82,7 @@ class TestMetaboLightsService:
 # ---------------------------------------------------------------------------
 
 class TestWorkbenchService:
+    SERVICE = "Metabolomics Workbench (metabolomicsworkbench.org)"
     URL = f"https://www.metabolomicsworkbench.org/rest/study/study_id/{WORKBENCH_ID}/summary"
 
     def test_endpoint_reachable(self):
@@ -117,6 +120,8 @@ REDU_EXPECTED_COLUMNS = {
 }
 
 class TestReDUService:
+    SERVICE = "ReDU (redu.gnps2.org)"
+    CRITICAL = True
     URL = "https://redu.gnps2.org/dump"
 
     def test_endpoint_reachable(self):
@@ -146,6 +151,8 @@ class TestReDUService:
 
 # ---------------------------------------------------------------------------
 class TestFASSTService:
+    SERVICE = "FASST (api.fasst.gnps2.org)"
+    CRITICAL = True
 
     def test_search_endpoint_accepts_job(self):
         """POST to /search should return a task ID immediately."""
