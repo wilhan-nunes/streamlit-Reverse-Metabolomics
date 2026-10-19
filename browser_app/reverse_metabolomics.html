@@ -7,7 +7,7 @@
   <!-- App version (YYYY-MM-DD, same scheme as the Streamlit app). This tag is the
        single source: the footer reads it. Bump it with every change and add an
        entry to CHANGELOG.md next to this file. -->
-  <meta name="version" content="2026-10-14">
+  <meta name="version" content="2026-10-19">
   <meta name="description" content="Search MS/MS spectra (USIs) across public metabolomics data with FASST and see which body parts, diseases and organisms they appear in, using ReDU metadata. The analysis runs in your browser.">
   <!--
     Reverse Metabolomics, browser edition. Ported from the Streamlit app in
@@ -24,9 +24,12 @@
       * MetaboLights and Metabolomics Workbench are asked for dataset details.
         MassIVE does not send CORS headers, so MassIVE datasets get links instead
         (flip MASSIVE_ALLOWS_CORS if that ever changes).
-      * ReDU has no CORS-enabled API and its dump is ~0.9 GB, so the user drops the
-        dump file in and it is parsed here. A compact copy (7 columns) is cached in
-        IndexedDB so the next visit does not need the file again.
+      * ReDU has no CORS-enabled API and its dump is ~0.9 GB, so the page cannot
+        fetch it. Instead embed_redu.py writes a gzipped copy of the 7 columns the
+        analysis uses into #redu-embedded (~7 MB), with the date of that ReDU data,
+        so the built page needs no file at all. In this source file the block is
+        empty and the user drops the dump in. A dropped file is cached in IndexedDB
+        and used instead of the built-in copy while it is the newer of the two.
     No libraries are loaded; charts are hand-rolled SVG.
   -->
   <style>
@@ -279,7 +282,7 @@
     <div id="redu-loaded" hidden>
       <div class="redu-loaded">
         <div class="stat"><div class="lbl">Files described</div><div class="val" id="redu-n"></div></div>
-        <div class="stat"><div class="lbl">ReDU file date</div><div class="val" id="redu-date"></div></div>
+        <div class="stat"><div class="lbl">ReDU version</div><div class="val" id="redu-date"></div></div>
         <div class="stat"><div class="lbl">Source</div><div class="val small" id="redu-src" style="font-weight:600"></div></div>
         <div class="row" style="margin-left:auto">
           <button class="secondary small" id="redu-replace">Load a newer file</button>
@@ -287,6 +290,11 @@
           <button class="secondary small" id="redu-forget">Forget saved copy</button>
         </div>
       </div>
+      <p class="muted small" style="margin:10px 0 0;line-height:1.5">
+        ReDU is updated daily. To use newer data, download the dump from
+        <a href="https://redu.gnps2.org/dump" target="_blank" rel="noopener">redu.gnps2.org/dump</a>
+        (about 0.9&nbsp;GB) and load it with <em>Load a newer file</em>. It is saved in this browser for next time.
+      </p>
     </div>
 
     <div id="redu-drop-area">
@@ -610,6 +618,11 @@
   </footer>
 </div>
 <div id="tip"></div>
+
+<!-- Built-in ReDU copy: a gzipped compact table, base64 encoded. embed_redu.py
+     fills this block and its data-redu-* attributes; leave it empty here. It sits
+     before the app script so the script can read it at startup. -->
+<script type="application/gzip" id="redu-embedded" data-redu-date="" data-redu-rows="" data-redu-source=""></script>
 
 <script>
 (function () {
@@ -1242,14 +1255,30 @@
       if (typeof DecompressionStream === "undefined") {
         throw new Error("This browser can't decompress .gz files. Unzip the file first, or use a current Chrome, Firefox or Safari.");
       }
+      // DecompressionStream hands out ~16 KB pieces. Yielding to the UI after each one
+      // (setTimeout is clamped to 4 ms) made a 5 MB .gz take ~50 s, so batch them.
       var reader = file.stream().pipeThrough(new DecompressionStream("gzip")).getReader();
-      var out = 0;
+      var out = 0, ended = false, BATCH = 4 * 1048576;
       return {
         next: function () {
-          return reader.read().then(function (r) {
-            if (!r.done) out += r.value.length;
-            return { done: r.done, value: r.value, label: (out / 1048576).toFixed(0) + " MB decompressed" };
-          });
+          if (ended) return Promise.resolve({ done: true });
+          var parts = [], size = 0;
+          function more() {
+            return reader.read().then(function (r) {
+              if (r.done) ended = true;
+              else { parts.push(r.value); size += r.value.length; }
+              if (!ended && size < BATCH) return more();
+              if (!size) return { done: true };
+              var buf = parts[0];
+              if (parts.length > 1) {
+                buf = new Uint8Array(size);
+                for (var i = 0, o = 0; i < parts.length; o += parts[i].length, i++) buf.set(parts[i], o);
+              }
+              out += size;
+              return { done: false, value: buf, label: (out / 1048576).toFixed(0) + " MB decompressed" };
+            });
+          }
+          return more();
         }
       };
     }
@@ -1431,7 +1460,7 @@
             return finishRedu(b, file);
           }
           lines(carry + dec.decode(chunk.value, { stream: true }), false);
-          onProgress(chunk.frac, chunk.label + " · " + fmtInt(b.n) + " rows");
+          onProgress(chunk.frac, chunk.label + " · " + fmtInt(b.n) + " rows", b.n);
           return yieldToUi().then(pump);
         });
       }
@@ -1516,7 +1545,7 @@
   }
   function saveRedu(redu) {
     var copy = {};
-    ["v", "n", "dicts", "codes", "fstr", "foff", "fileName", "fileDate", "savedAt"].forEach(function (k) { copy[k] = redu[k]; });
+    ["v", "n", "dicts", "codes", "fstr", "foff", "fileName", "fileDate", "savedAt", "embedded"].forEach(function (k) { copy[k] = redu[k]; });
     return idbDo("readwrite", function (s) { return s.put(copy, IDB_KEY); });
   }
   function loadSavedRedu() { return idbDo("readonly", function (s) { return s.get(IDB_KEY); }); }
@@ -1536,12 +1565,27 @@
     $("redu-loaded").hidden = !redu;
     $("redu-drop-area").hidden = !!redu;
     $("redu-step").className = redu ? "step done" : "step";
-    $("redu-head-note").textContent = redu ? (redu.cached ? "restored from this browser" : "loaded") : "required for the analysis";
+    $("redu-head-note").textContent = redu ?
+      (redu.embedded ? "built into this page" : redu.cached ? "restored from this browser" : "loaded") :
+      "required for the analysis";
     if (!redu) return;
     $("redu-n").textContent = fmtInt(redu.n);
     $("redu-date").textContent = fmtDate(redu.fileDate);
-    $("redu-src").textContent = redu.fileName;
-    $("redu-src").title = "Saved in this browser on " + fmtDate(redu.savedAt);
+    $("redu-date").title = redu.embedded ? "The date ReDU published this data" :
+      "The last-modified date of the file you loaded";
+    $("redu-src").textContent = redu.embedded ? "Built into this page" : redu.fileName;
+    $("redu-src").title = redu.embedded ? "Bundled with this page, so nothing was downloaded" :
+      "Saved in this browser on " + fmtDate(redu.savedAt);
+  }
+
+  function warnIfOldRedu(redu, okText) {
+    var age = reduAgeDays(redu);
+    if (age > REDU_MAX_AGE_DAYS) {
+      status(okText.replace(/\.$/, "") + ", but that is " + Math.floor(age) + " days old. ReDU grows constantly, so " +
+        "consider downloading a fresh dump from redu.gnps2.org/dump and loading it in step 1.", "warn");
+    } else if (!$("status").textContent) {
+      status(okText, "ok");
+    }
   }
 
   function acceptRedu(redu, cached) {
@@ -1585,6 +1629,55 @@
     }).then(function () { state.reduBusy = false; });
   }
 
+  // --- Built-in copy (see #redu-embedded). After the first parse it is saved like
+  // a loaded file: restoring takes ~2 s, parsing it again ~8 s.
+  function embeddedReduInfo() {
+    var el = $("redu-embedded");
+    if (!el || !/\S/.test(el.textContent)) return null;
+    return {
+      el: el,
+      date: Date.parse(el.getAttribute("data-redu-date") || "") || 0,
+      rows: Number(el.getAttribute("data-redu-rows")) || 0
+    };
+  }
+
+  function embeddedReduText(redu) {
+    return "Using the ReDU metadata built into this page (" + fmtInt(redu.n) + " files, ReDU version " +
+      fmtDate(redu.fileDate) + ").";
+  }
+
+  function loadEmbeddedRedu(info) {
+    if (state.reduBusy) return Promise.resolve();
+    state.reduBusy = true;
+    $("redu-head-note").textContent = "unpacking the built-in copy…";
+    showReduProgress(0, "unpacking…");
+    var chain;
+    try {
+      var bin = atob(info.el.textContent.replace(/\s+/g, ""));
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      bin = null;
+      var file = new File([bytes], "built-in copy", { lastModified: info.date || Date.now() });
+      // gzip streams report no total, so progress comes from the row count the build recorded.
+      chain = parseReduFile(file, function (frac, label, rows) {
+        showReduProgress(info.rows ? Math.min(1, rows / info.rows) : frac, label);
+      });
+    } catch (e) { chain = Promise.reject(e); }
+    return chain.then(function (redu) {
+      showReduProgress(1, "indexing " + fmtInt(redu.n) + " rows…");
+      return yieldToUi().then(function () {
+        redu.embedded = true;
+        acceptRedu(redu, false);
+        warnIfOldRedu(redu, embeddedReduText(redu));
+        return saveRedu(redu)["catch"](function () {});   // only costs speed next visit
+      });
+    }).catch(function (err) {
+      renderReduCard();
+      status("Couldn't unpack the ReDU copy built into this page (" + (err && err.message ? err.message : err) +
+        "). Download the dump from redu.gnps2.org/dump and drop it in step 1 instead.", "err");
+    }).then(function () { state.reduBusy = false; });
+  }
+
   var drop = $("drop");
   ["dragenter", "dragover"].forEach(function (evt) {
     drop.addEventListener(evt, function (e) {
@@ -1614,7 +1707,15 @@
   $("redu-replace").addEventListener("click", function () { $("redu-input").click(); });
   $("redu-forget").addEventListener("click", function () {
     forgetSavedRedu().then(function () {
-      status("Removed the saved ReDU copy from this browser. The one loaded now stays until you leave the page.", "ok");
+      var info = embeddedReduInfo();
+      if (info && state.redu && !state.redu.embedded) {
+        status("Removed the saved ReDU copy from this browser. Switching to the copy built into this page…", "ok");
+        loadEmbeddedRedu(info);
+      } else if (info) {
+        status("Removed the saved ReDU copy from this browser. This page uses its built-in copy.", "ok");
+      } else {
+        status("Removed the saved ReDU copy from this browser. The one loaded now stays until you leave the page.", "ok");
+      }
     }, function (err) {
       status("Couldn't remove the saved copy: " + (err && err.message || err), "err");
     });
@@ -3342,21 +3443,26 @@
 
     renderReduCard();
     $("redu-head-note").textContent = "checking this browser for a saved copy…";
+    // The saved copy (a file the user loaded, or the built-in one saved on an earlier
+    // visit) wins only while it is at least as new as the built-in one, so rebuilding
+    // the page with fresher data reaches people who loaded a file before.
+    var embedded = embeddedReduInfo();
+    function useEmbedded() {
+      if (embedded && !state.redu && !state.reduBusy) loadEmbeddedRedu(embedded);
+      else renderReduCard();
+    }
     loadSavedRedu().then(function (saved) {
-      if (!saved || saved.v !== REDU_CACHE_VERSION || !saved.n || state.redu) { renderReduCard(); return; }
+      if (!saved || saved.v !== REDU_CACHE_VERSION || !saved.n || state.redu) { useEmbedded(); return; }
+      if (embedded && saved.fileDate < embedded.date) { useEmbedded(); return; }
       $("redu-head-note").textContent = "restoring the saved copy…";
       return yieldToUi().then(function () {
         if (state.redu) return;      // a file was dropped meanwhile
         acceptRedu(saved, true);
-        var age = reduAgeDays(saved);
-        if (age > REDU_MAX_AGE_DAYS) {
-          status("Using the ReDU copy saved in this browser, dated " + fmtDate(saved.fileDate) + " (" + Math.floor(age) +
-            " days old). ReDU grows constantly, so consider loading a fresh dump.", "warn");
-        } else if (!$("status").textContent) {
-          status("Using the ReDU metadata saved in this browser (" + fmtInt(saved.n) + " files, dated " + fmtDate(saved.fileDate) + ").", "ok");
-        }
+        warnIfOldRedu(saved, saved.embedded ? embeddedReduText(saved) :
+          "Using the ReDU metadata saved in this browser (" + fmtInt(saved.n) + " files, dated " + fmtDate(saved.fileDate) +
+          (embedded && saved.fileDate > embedded.date ? ", newer than the copy built into this page" : "") + ").");
       });
-    })["catch"](function () { renderReduCard(); });
+    })["catch"](useEmbedded);
   })();
 })();
 </script>

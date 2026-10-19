@@ -4,3 +4,4 @@
 REDU_metadata.tsv
 .env
 *.parquet
+/browser_app/build/

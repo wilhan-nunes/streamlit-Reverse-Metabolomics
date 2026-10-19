@@ -13,6 +13,34 @@ uses. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2026-10-19]
+
+### Added
+
+- A ReDU copy can be built into the page, so it works as one file with no
+  ReDU download. `embed_redu.py` writes the 7 columns the analysis uses,
+  gzipped (the page grows to about 7 MB), into
+  `build/reverse_metabolomics.html`, along with the date of that ReDU data.
+  Step 1 shows that date as the *ReDU version*. Run the script again to
+  refresh the data.
+- Step 1 links to the ReDU dump and explains how to load a newer copy by hand.
+
+### Changed
+
+- The built-in copy is saved in the browser after its first load, so later
+  visits restore it instead of unpacking it again (about 2.5 s instead of
+  about 10 s in headless Firefox).
+- A file loaded by hand is used instead of the built-in copy only while it is
+  at least as new, so a rebuilt page with fresher data replaces older copies.
+  *Forget saved copy* switches back to the built-in copy.
+- "ReDU file date" is now labelled "ReDU version".
+
+### Fixed
+
+- Loading a `.gz` ReDU file took about 50 s even for a 5 MB compact copy,
+  because the page paused after every 16 KB of decompressed data. It now works
+  in 4 MB batches, about five times faster.
+
 ## [2026-10-14]
 
 First release: a single-file, in-browser port of the Streamlit app (version
@@ -67,4 +95,5 @@ First release: a single-file, in-browser port of the Streamlit app (version
   match the Streamlit app.
 
 [Unreleased]: https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics/commits/main/browser_app
+[2026-10-19]: https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics/commits/main/browser_app
 [2026-10-14]: https://github.com/wilhan-nunes/streamlit-Reverse-Metabolomics/commits/main/browser_app
